@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Scene Builder">
+<meta name="theme-color" content="#070605">
+<title>DMX Scene Builder</title>
+<link rel="apple-touch-icon" href="img/icon-180.png">
+<link rel="icon" href="img/icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <button class="btn small ghost rail-toggle" id="railToggle" aria-label="Floats">&#9776; Floats</button>
+    <img class="logo" src="img/logo.png" alt="Jeff Holmes Presents">
+    <div class="brand">
+      <span class="kicker small">Jeff Holmes Presents</span>
+      <span class="title">DMX Scene Builder</span>
+    </div>
+    <div class="spacer"></div>
+    <span class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">Starting</span></span>
+    <button class="btn small off" id="blackoutBtn" title="Blackout the live float">Blackout</button>
+    <button class="btn small off" id="releaseBtn" title="Stop sending to the boxes">Release</button>
+    <button class="btn small ghost" id="setupBtn" aria-label="Setup">&#9881; Setup</button>
+  </header>
+  <div class="body">
+    <nav class="rail" id="rail"></nav>
+    <main class="main" id="main"><div class="main-inner" id="mainInner"></div></main>
+  </div>
+</div>
+<div id="modalRoot"></div>
+<div id="toastRoot"></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,1286 @@
+/* DMX Scene Builder: iPad / browser front end. Vanilla JS, no build step. */
+"use strict";
+
+// ------------------------------------------------------------------ tiny helpers
+const $ = (s, el = document) => el.querySelector(s);
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === null || v === undefined || v === false) continue;
+      if (k === "class") el.className = v;
+      else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
+      else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+      else if (k === "html") el.innerHTML = v;
+      else if (v === true) el.setAttribute(k, "");
+      else el.setAttribute(k, v);
+    }
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const uid8 = () => Math.random().toString(16).slice(2, 10);
+
+async function api(method, path, body) {
+  const r = await fetch(path, {
+    method, headers: body !== undefined ? { "Content-Type": "application/json" } : {},
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  let data = null;
+  try { data = await r.json(); } catch (e) { /* ignore */ }
+  if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
+  return data;
+}
+
+function toast(msg, kind = "") {
+  const root = $("#toastRoot");
+  root.innerHTML = "";
+  const t = h("div", { class: "toast " + kind }, msg);
+  root.append(t);
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.remove(), kind === "bad" ? 6000 : 2600);
+}
+
+function modal(title, body, actions) {
+  const root = $("#modalRoot");
+  const close = () => { root.innerHTML = ""; };
+  const scrim = h("div", { class: "scrim", onclick: (e) => { if (e.target === scrim) close(); } },
+    h("div", { class: "modal" }, h("h2", null, title), body,
+      h("div", { class: "btn-row", style: { marginTop: "18px", justifyContent: "flex-end" } },
+        (actions || []).map(a => h("button", { class: "btn " + (a.cls || ""), onclick: async () => { const keep = await a.fn(close); if (!keep) close(); } }, a.label)),
+        h("button", { class: "btn ghost", onclick: close }, "Close"))));
+  root.innerHTML = "";
+  root.append(scrim);
+  return close;
+}
+
+function ask(title, label, value) {
+  return new Promise(resolve => {
+    const inp = h("input", { class: "f", value: value || "" });
+    modal(title, h("div", { class: "field" }, h("label", null, label), inp),
+      [{ label: "OK", cls: "gold", fn: () => resolve(inp.value.trim()) }]);
+    setTimeout(() => inp.focus(), 50);
+  });
+}
+
+function confirmBox(title, text, okLabel = "Yes", cls = "gold") {
+  return new Promise(resolve => {
+    modal(title, h("p", null, text), [{ label: okLabel, cls, fn: () => resolve(true) }]);
+  });
+}
+
+// ------------------------------------------------------------------ color preview (mirrors fixtures.py)
+function kelvinToRgb(k) {
+  const t = clamp(k, 1000, 40000) / 100;
+  let r, g, b;
+  if (t <= 66) { r = 255; g = 99.4708025861 * Math.log(t) - 161.1195681661; b = t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307; }
+  else { r = 329.698727446 * Math.pow(t - 60, -0.1332047592); g = 288.1221695283 * Math.pow(t - 60, -0.0755148492); b = 255; }
+  return [clamp(r, 0, 255) / 255, clamp(g, 0, 255) / 255, clamp(b, 0, 255) / 255];
+}
+function hsvToRgb(hh, s, v) {
+  const i = Math.floor(hh / 60) % 6, f = hh / 60 - Math.floor(hh / 60);
+  const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+  return [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i];
+}
+const DEFAULT_STATE = { dim: 1, kind: "white", cct: 3000, hue: 30, sat: 1, white: 0 };
+function effVariant(fx) { return (MODES[fx.variant] && MODES[fx.variant][fx.mode]) ? fx.variant : "RGBW"; }
+function stateOf(fl, fx) { return Object.assign({}, DEFAULT_STATE, (fl.live || {})[fx.id] || {}); }
+function previewCss(fx, st) {
+  const v = effVariant(fx);
+  let rgb;
+  if (v === "RGBW" && st.kind === "color") {
+    rgb = hsvToRgb(st.hue, st.sat, 1);
+    const w = kelvinToRgb(6500);
+    rgb = rgb.map((c, i) => Math.min(1, c + st.white * w[i]));
+  } else if (v === "PW") rgb = kelvinToRgb(3000);
+  else if (v === "RGBW" && !MODES_ROLES(fx).includes("ctc")) rgb = kelvinToRgb(fx.variant === "RGBW" ? 6500 : 3000);
+  else rgb = kelvinToRgb(v === "TW" ? clamp(st.cct, 2700, 6500) : st.cct);
+  const d = st.dim;
+  // perceptual boost so dim looks still read on screen
+  const k = d <= 0 ? 0 : 0.12 + 0.88 * Math.pow(d, 0.6);
+  return `rgb(${rgb.map(c => Math.round(c * k * 255)).join(",")})`;
+}
+function MODES_ROLES(fx) { const m = (MODES[effVariant(fx)] || {})[fx.mode]; return m ? m.roles : []; }
+function footprint(fx) { return MODES_ROLES(fx).length || 0; }
+
+// ------------------------------------------------------------------ app state
+const S = {
+  project: null, engine: {}, sim: null, settings: {}, version: "",
+  floatId: localStorage.getItem("fl.float") || null,
+  tab: localStorage.getItem("fl.tab") || "look",
+  sel: new Set(),
+  rev: 0,            // project structure revision (patch/looks/palette); other devices' edits bump it
+  pointerDown: false,
+  scan: {},          // box_id -> scan result
+  links: {},         // scanned uid -> fixture id ("" = none, "__new" = add)
+  discover: null,    // nodes list
+  saving: false, saveTimer: null,
+};
+let MODES = {};      // variant -> mode -> {name, roles}
+let MODE_LIST = [];
+
+function curFloat() { return S.project && S.project.floats.find(f => f.id === S.floatId); }
+function isLive(fl) { return fl && S.engine.active_float === fl.id && S.engine.output; }
+
+async function loadState() {
+  const st = await api("GET", "/api/state");
+  S.project = st.project; S.rev = st.project.rev || 0; S.engine = st.engine; S.sim = st.sim; S.settings = st.settings || {}; S.version = st.version;
+  MODES = {}; MODE_LIST = st.modes;
+  for (const m of st.modes) { (MODES[m.variant] = MODES[m.variant] || {})[m.mode] = m; }
+  if (!curFloat() && S.project.floats.length) S.floatId = S.project.floats[0].id;
+}
+
+// persist float edits (patch / names) with a short debounce
+function saveFloat(fl, immediate) {
+  clearTimeout(S.saveTimer);
+  S.savePending = true;
+  const go = async () => {
+    try {
+      const body = JSON.parse(JSON.stringify(fl));
+      delete body.problems; delete body.live; delete body.looks;
+      body.rev = fl.rev || 0;
+      const res = await api("PUT", "/api/floats/" + fl.id, body);
+      fl.rev = res.rev;
+      S.savePending = false;
+      await refreshProblems();
+    } catch (e) {
+      S.savePending = false;
+      toast(e.message, "bad");
+      if (/another device/.test(e.message)) { await reloadFloat(fl.id); renderMain(); }
+    }
+  };
+  if (immediate) return go();
+  S.saveTimer = setTimeout(go, 350);
+}
+async function refreshProblems() {
+  const st = await api("GET", "/api/state");
+  S.rev = st.project.rev || 0;
+  for (const f of st.project.floats) {
+    const mine = S.project.floats.find(x => x.id === f.id);
+    if (mine) mine.problems = f.problems;
+  }
+  renderRail();
+  const pb = $("#patchProblems");
+  if (pb) pb.replaceWith(problemsBox(curFloat()));
+}
+
+// live look changes, merged and throttled
+const liveQ = { pending: {}, timer: null, inflight: false };
+function sendLive(fl, changes) {
+  for (const [id, st] of Object.entries(changes)) {
+    fl.live[id] = Object.assign({}, DEFAULT_STATE, fl.live[id] || {}, st);
+    liveQ.pending[id] = Object.assign(liveQ.pending[id] || {}, st);
+  }
+  if (!liveQ.timer) liveQ.timer = setTimeout(() => flushLive(fl.id), 45);
+}
+async function flushLive(fid) {
+  liveQ.timer = null;
+  if (liveQ.inflight) { liveQ.timer = setTimeout(() => flushLive(fid), 30); return; }
+  const changes = liveQ.pending; liveQ.pending = {};
+  if (!Object.keys(changes).length) return;
+  liveQ.inflight = true;
+  try { await api("POST", `/api/floats/${fid}/live`, { changes }); }
+  catch (e) { toast(e.message, "bad"); }
+  finally { liveQ.inflight = false; }
+}
+
+// ------------------------------------------------------------------ top bar & status
+function renderStatus() {
+  const pill = $("#statusPill"), txt = $("#statusText");
+  const e = S.engine;
+  const live = S.project && S.project.floats.find(f => f.id === e.active_float);
+  pill.className = "status-pill";
+  if (e.bind_error) { pill.classList.add("warn"); txt.textContent = "Port busy"; pill.title = e.bind_error; }
+  else if (e.output && e.send_error) { pill.classList.add("warn"); txt.textContent = "Can't reach box"; pill.title = e.send_error + ". Check the cable and the Mac's Ethernet IP (Setup)."; }
+  else if (e.output && live) { pill.classList.add("live"); txt.textContent = "Live · " + (live.code || live.name); pill.title = "Sending to " + live.name; }
+  else if (S.sim) { pill.classList.add("sim"); txt.textContent = "Simulator on"; pill.title = "Virtual E-Box is running"; }
+  else { txt.textContent = "Not sending"; pill.title = "Nothing is being sent to the boxes"; }
+  if (e.paused_for_rdm) { txt.textContent = "Talking to fixtures"; }
+  if (e.hold) { pill.className = "status-pill warn"; txt.textContent = "Re-addressing, output at zero"; }
+  else if (e.sweep) { pill.className = "status-pill warn"; txt.textContent = "Address finder running"; pill.title = "Everything else is dark. Stop it on the Patch tab."; }
+  const rb = $("#releaseBtn");
+  rb.textContent = e.output ? "Release" : "Released";
+  rb.className = "btn small " + (e.output ? "danger" : "off");
+  const bb = $("#blackoutBtn");
+  bb.className = "btn small " + (e.blackout ? "danger" : "off");
+  bb.textContent = e.blackout ? "Blackout on" : "Blackout";
+}
+
+async function pollStatus() {
+  try {
+    const st = await api("GET", "/api/status");
+    const wasJob = S.engine.job && S.engine.job.state;
+    const prevActive = S.engine.active_float + ":" + S.engine.output;
+    S.engine = st.engine; S.sim = st.sim;
+    renderStatus();
+    await maybeSync(st.rev);
+    updateLiveBits();
+    if ((S.engine.active_float + ":" + S.engine.output) !== prevActive) { renderRail(); renderFloatHead(); }
+    if (wasJob === "running" && S.engine.job && S.engine.job.state !== "running" && S.tab === "save") renderMain();
+  } catch (e) {
+    $("#statusText").textContent = "No connection";
+    $("#statusPill").className = "status-pill warn";
+  }
+}
+
+async function maybeSync(rev) {
+  if (rev === undefined || rev === S.rev) return;
+  const a = document.activeElement;
+  const editing = a && /INPUT|SELECT|TEXTAREA/.test(a.tagName);
+  if (editing || S.pointerDown || S.savePending || $("#modalRoot").children.length || liveQ.timer || liveQ.inflight) return;
+  const scroll = $("#main").scrollTop;
+  await loadState();
+  renderRail(); renderMain();
+  $("#main").scrollTop = scroll;
+}
+
+function updateLiveBits() {
+  // job progress
+  const jp = $("#jobBox");
+  if (jp) jp.replaceWith(jobBox());
+  const sw = $("#sweepBox");
+  if (sw) sw.replaceWith(sweepBox());
+  const sb = $("#simBox");
+  if (sb) sb.replaceWith(simBox());
+}
+
+// ------------------------------------------------------------------ rail (float list)
+function renderRail() {
+  const rail = $("#rail");
+  rail.innerHTML = "";
+  rail.append(h("div", { class: "kicker", style: { padding: "4px 10px 10px" } }, S.project ? S.project.project : ""));
+  for (const fl of S.project.floats) {
+    const probs = (fl.problems || []);
+    const errs = probs.filter(p => p.level === "error").length;
+    const warns = probs.length - errs;
+    const tw = fl.fixtures.filter(x => x.variant === "TW").length;
+    const rgb = fl.fixtures.filter(x => x.variant === "RGBW").length;
+    rail.append(h("button", {
+      class: "float-item" + (fl.id === S.floatId ? " active" : ""),
+      onclick: () => { selectFloat(fl.id); rail.classList.remove("open"); },
+    },
+      h("div", { class: "code" }, fl.code || " "),
+      h("div", { class: "name" }, fl.name),
+      h("div", { class: "meta" },
+        h("span", null, fl.fixtures.length + " lights"),
+        tw ? h("span", null, tw + " TW") : null,
+        rgb ? h("span", null, rgb + " RGB") : null,
+        errs ? h("span", { class: "badge bad", title: "patch errors" }, errs) : null,
+        warns ? h("span", { class: "badge warn", title: "unaddressed" }, warns) : null,
+        fl.run_mode === "live_dmx" ? h("span", { class: "badge warn", title: "Runs on live DMX input in the parade" }, "DMX in") : null,
+        isLive(fl) ? h("span", { class: "live-tag" }, "● Live") : null)));
+  }
+  rail.append(h("div", { style: { padding: "10px" } },
+    h("button", { class: "btn small ghost", style: { width: "100%" }, onclick: addFloat }, "+ Add float")));
+}
+
+async function addFloat() {
+  const name = await ask("New float", "Float name", "");
+  if (!name) return;
+  const fl = await api("POST", "/api/floats", { name });
+  fl.problems = [];
+  S.project.floats.push(fl);
+  selectFloat(fl.id);
+}
+
+function selectFloat(id) {
+  S.floatId = id; S.sel.clear();
+  localStorage.setItem("fl.float", id);
+  renderRail(); renderMain();
+  $("#main").scrollTop = 0;
+}
+
+// ------------------------------------------------------------------ main area
+function renderMain() {
+  const root = $("#mainInner");
+  root.innerHTML = "";
+  const fl = curFloat();
+  if (!fl) {
+    root.append(h("div", { class: "empty" }, h("img", { src: "img/logo.png", alt: "" }),
+      h("h2", { style: { marginTop: "20px" } }, "No floats yet"),
+      h("p", { class: "muted" }, "Add a float, or load the fixture schedule from Setup."),
+      h("button", { class: "btn gold", onclick: addFloat }, "Add float")));
+    return;
+  }
+  root.append(h("div", { id: "floatHead" }));
+  renderFloatHead();
+  const tabs = [["look", "Look"], ["patch", "Patch & addressing"], ["save", fl.run_mode === "live_dmx" ? "Parade setup" : "Save to fixtures"]];
+  root.append(h("div", { class: "tabs" }, tabs.map(([k, label]) =>
+    h("button", { class: "tab" + (S.tab === k ? " active" : ""), onclick: () => { S.tab = k; localStorage.setItem("fl.tab", k); renderMain(); } }, label))));
+  const body = h("div", { id: "tabBody" });
+  root.append(body);
+  if (S.tab === "look") renderLook(body, fl);
+  else if (S.tab === "patch") renderPatch(body, fl);
+  else renderSave(body, fl);
+}
+
+function renderFloatHead() {
+  const el = $("#floatHead");
+  const fl = curFloat();
+  if (!el || !fl) return;
+  el.innerHTML = "";
+  const live = isLive(fl);
+  const other = S.engine.output && S.engine.active_float && S.engine.active_float !== fl.id
+    ? S.project.floats.find(f => f.id === S.engine.active_float) : null;
+  el.append(h("div", { class: "float-head" },
+    h("div", { class: "grow" },
+      h("div", { class: "kicker" }, (fl.code ? fl.code + " · " : "") + fl.fixtures.length + " fixtures · " + fl.boxes.length + (fl.boxes.length === 1 ? " box" : " boxes")),
+      h("h1", null, fl.name)),
+    live
+      ? h("div", { class: "btn-row" }, h("span", { class: "status-pill live" }, h("span", { class: "dot" }), "Live on this float"))
+      : h("button", { class: "btn gold", onclick: () => goLive(fl) }, other ? "Switch live to this float" : "Go live on this float")));
+  if (fl.notes) el.append(h("div", { class: "note warn", style: { marginBottom: "10px" } }, fl.notes));
+  if (!live) el.append(h("div", { class: "note", style: { marginBottom: "10px" } },
+    other ? `Live output is on ${other.name}. Changes here are saved but not sent until you switch.`
+          : "Not live. Changes are saved but not sent to the lights until you go live."));
+  const noIp = fl.boxes.filter(b => !b.ip);
+  if (noIp.length) el.append(h("div", { class: "note warn", style: { marginBottom: "10px" } },
+    `${noIp.map(b => b.name).join(", ")} has no IP address yet. Set it on the Patch tab.`));
+}
+
+async function goLive(fl) {
+  try {
+    const r = await api("POST", "/api/output", { action: "activate", float_id: fl.id });
+    S.engine = r.engine;
+    renderStatus(); renderRail(); renderMain();
+    toast("Live on " + fl.name, "ok");
+  } catch (e) { toast(e.message, "bad"); }
+}
+
+// ------------------------------------------------------------------ LOOK tab
+function renderLook(body, fl) {
+  if (!fl.fixtures.length) {
+    body.append(h("div", { class: "card" }, h("p", null, "No fixtures on this float yet."),
+      h("button", { class: "btn", onclick: () => { S.tab = "patch"; renderMain(); } }, "Go to Patch")));
+    return;
+  }
+  const layout = h("div", { class: "look-layout" });
+  const left = h("div");
+  const right = h("div", { class: "panel" });
+  layout.append(left, right);
+  body.append(layout);
+
+  // selection bar
+  const quick = [
+    ["All", () => fl.fixtures.map(f => f.id)],
+    ["Tunable white", () => fl.fixtures.filter(f => f.variant === "TW").map(f => f.id)],
+    ["RGB + White", () => fl.fixtures.filter(f => f.variant === "RGBW").map(f => f.id)],
+  ];
+  const types = [...new Set(fl.fixtures.map(f => f.type_id).filter(Boolean))].sort();
+  const bar = h("div", { class: "select-bar" },
+    h("span", { class: "kicker small", style: { marginRight: "4px" } }, "Select"),
+    quick.map(([label, fn]) => h("button", { class: "chip", onclick: () => { S.sel = new Set(fn()); refreshLook(); } }, label)),
+    types.length > 1 ? types.map(t => h("button", { class: "chip", onclick: () => { S.sel = new Set(fl.fixtures.filter(f => f.type_id === t).map(f => f.id)); refreshLook(); } }, t)) : null,
+    h("button", { class: "chip", onclick: () => { S.sel.clear(); refreshLook(); } }, "None"));
+  left.append(bar);
+
+  const grid = h("div", { class: "fx-grid", id: "fxGrid" });
+  left.append(grid);
+  left.append(h("hr", { class: "rule" }));
+  left.append(looksCard(fl));
+
+  function tile(fx) {
+    const st = stateOf(fl, fx);
+    const sel = S.sel.has(fx.id);
+    const addrTxt = fx.address ? "ch " + fx.address : "no address";
+    return h("div", {
+      class: "fx" + (sel ? " sel" : ""), "data-id": fx.id,
+      onclick: (e) => {
+        if (S.sel.has(fx.id)) S.sel.delete(fx.id); else S.sel.add(fx.id);
+        refreshLook();
+      },
+    },
+      sel ? h("div", { class: "check" }, "✓") : null,
+      !fx.address ? h("div", { class: "warn-dot", title: "No DMX address" }) : null,
+      h("div", { class: "swatch", style: { background: previewCss(fx, st) } }),
+      h("div", { class: "lbl", title: fx.notes || "" }, fx.label || "Fixture"),
+      h("div", { class: "sub" }, h("span", { class: "type" }, fx.variant === "RGBW" ? "RGB+W" : fx.variant), h("span", null, Math.round(st.dim * 100) + "%")),
+      h("div", { class: "sub" }, h("span", null, (fx.notes || "").split(" | ")[0].slice(0, 22)), h("span", null, addrTxt)));
+  }
+  function refreshTiles() {
+    grid.innerHTML = "";
+    for (const fx of fl.fixtures) grid.append(tile(fx));
+  }
+  function refreshLook() { refreshTiles(); renderPanel(); }
+  S._refreshTiles = refreshTiles;
+
+  function renderPanel() {
+    right.innerHTML = "";
+    const chosen = fl.fixtures.filter(f => S.sel.has(f.id));
+    const card = h("div", { class: "card" });
+    right.append(card);
+    if (!chosen.length) {
+      card.append(h("div", { class: "sel-summary" }, "Tap lights to select them"),
+        h("p", { class: "muted" }, "Tap as many as you like; every selected light changes together. Or tap a group above (All, Tunable white, RGB + White, or a fixture type) to grab them all at once. Tap a light again to drop it."));
+      card.append(paletteSection(fl, [], null, renderPanel));
+      return;
+    }
+    const variants = new Set(chosen.map(effVariant));
+    const states = chosen.map(f => stateOf(fl, f));
+    card.append(h("div", { class: "sel-summary" }, chosen.length === 1 ? chosen[0].label : chosen.length + " lights selected, changing together"),
+      h("div", { class: "kicker small" }, [...new Set(chosen.map(f => f.variant === "RGBW" ? "RGB + White" : f.variant === "TW" ? "Tunable white" : "White"))].join(" + ")));
+
+    const apply = (partial) => {
+      const changes = {};
+      for (const f of chosen) changes[f.id] = typeof partial === "function" ? partial(f, stateOf(fl, f)) : partial;
+      sendLive(fl, changes);
+      refreshTiles();
+    };
+
+    // intensity
+    const dims = states.map(s => s.dim);
+    card.append(sliderCtl({
+      label: "Brightness", min: 0, max: 100, step: 1, value: Math.round(dims[0] * 100), mixed: new Set(dims.map(d => Math.round(d * 100))).size > 1,
+      fmt: v => v + "%", track: "linear-gradient(90deg,#000,#F6E3AE)",
+      onInput: v => apply({ dim: v / 100 }),
+    }));
+    card.append(h("div", { class: "presets" },
+      [0, 10, 25, 50, 75, 100].map(p => h("button", { onclick: () => { apply({ dim: p / 100 }); renderPanel(); } }, p === 0 ? "Off" : p + "%"))));
+
+    const hasRGB = variants.has("RGBW");
+    const rgbStates = chosen.filter(f => effVariant(f) === "RGBW").map(f => stateOf(fl, f));
+    const kind = rgbStates.length ? (rgbStates.every(s => s.kind === "color") ? "color" : rgbStates.every(s => s.kind === "white") ? "white" : "mixed") : "white";
+
+    if (hasRGB) {
+      card.append(h("div", { class: "ctl" }, h("div", { class: "ctl-label" }, h("span", { class: "kicker small" }, "RGB fixtures show")),
+        h("div", { class: "seg" },
+          h("button", { class: kind === "white" ? "on" : "", onclick: () => { apply((f) => effVariant(f) === "RGBW" ? { kind: "white" } : {}); renderPanel(); } }, "White"),
+          h("button", { class: kind === "color" ? "on" : "", onclick: () => { apply((f) => effVariant(f) === "RGBW" ? { kind: "color" } : {}); renderPanel(); } }, "Color"))));
+    }
+
+    // color temperature (TW, or RGB in white)
+    const showCct = variants.has("TW") || (hasRGB && kind !== "color");
+    if (showCct) {
+      const onlyRgb = !variants.has("TW");
+      const lo = onlyRgb ? 1800 : 2700, hi = 6500;
+      const ccts = states.map(s => Math.round(s.cct));
+      const noCtc = chosen.filter(f => effVariant(f) === "RGBW" && !MODES_ROLES(f).includes("ctc"));
+      card.append(sliderCtl({
+        label: "Color temperature", min: lo, max: hi, step: 50, value: clamp(ccts[0], lo, hi), mixed: new Set(ccts).size > 1,
+        fmt: v => v + "K", track: `linear-gradient(90deg, ${[lo, 3000, 4000, 5000, hi].map(k => "rgb(" + kelvinToRgb(k).map(c => Math.round(c * 255)).join(",") + ")").join(",")})`,
+        onInput: v => apply({ cct: v }),
+      }));
+      card.append(h("div", { class: "presets" },
+        [2700, 3000, 3200, 4000, 5000, 5600, 6500].filter(k => k >= lo).map(k => h("button", { onclick: () => { apply({ cct: k }); renderPanel(); } }, k + "K"))));
+      if (noCtc.length) card.append(h("div", { class: "note warn", style: { marginTop: "10px", fontSize: "13px" } },
+        `${noCtc.length} RGB fixture(s) are in a mode without color-temperature control, so they show their built-in white only. Use Mode 3, 4, 6 or 7 to tune their white.`));
+    }
+
+    // color (RGB in color)
+    if (hasRGB && kind !== "white") {
+      const st0 = rgbStates[0] || DEFAULT_STATE;
+      const hueTrack = "linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)";
+      card.append(sliderCtl({ label: "Color", min: 0, max: 359, step: 1, value: Math.round(st0.hue), mixed: new Set(rgbStates.map(s => Math.round(s.hue))).size > 1, fmt: v => v + "°", track: hueTrack,
+        onInput: v => apply(f => effVariant(f) === "RGBW" ? { hue: v, kind: "color" } : {}) }));
+      const [r, g, b] = hsvToRgb(st0.hue, 1, 1).map(c => Math.round(c * 255));
+      card.append(sliderCtl({ label: "Saturation", min: 0, max: 100, step: 1, value: Math.round(st0.sat * 100), mixed: false, fmt: v => v + "%", track: `linear-gradient(90deg,#fff,rgb(${r},${g},${b}))`,
+        onInput: v => apply(f => effVariant(f) === "RGBW" ? { sat: v / 100, kind: "color" } : {}) }));
+      card.append(sliderCtl({ label: "Add white", min: 0, max: 100, step: 1, value: Math.round(st0.white * 100), mixed: false, fmt: v => v + "%", track: "linear-gradient(90deg,#000,#fff)",
+        onInput: v => apply(f => effVariant(f) === "RGBW" ? { white: v / 100, kind: "color" } : {}) }));
+      const sw = [["Red", 0, 1], ["Amber", 30, 1], ["Gold", 42, .85], ["Yellow", 55, 1], ["Green", 120, 1], ["Teal", 170, 1],
+        ["Cyan", 185, 1], ["Blue", 235, 1], ["Deep blue", 245, 1], ["Lavender", 265, .45], ["Magenta", 300, 1], ["Pink", 330, .55]];
+      card.append(h("div", { class: "swatches" }, sw.map(([name, hue, sat]) => {
+        const c = hsvToRgb(hue, sat, 1).map(x => Math.round(x * 255));
+        return h("button", { title: name, style: { background: `rgb(${c.join(",")})` }, onclick: () => { apply(f => effVariant(f) === "RGBW" ? { kind: "color", hue, sat, white: 0 } : {}); renderPanel(); } });
+      })));
+    }
+
+    card.append(paletteSection(fl, chosen, apply, renderPanel));
+
+    card.append(h("hr", { class: "rule" }),
+      h("div", { class: "btn-row" },
+        h("button", { class: "btn small", onclick: () => flashFixtures(fl, chosen) }, "Flash to find"),
+        chosen.length === 1 ? h("span", { class: "muted", style: { fontSize: "13px" } }, chosen[0].address ? `${chosen[0].variant} Mode ${chosen[0].mode} · ch ${chosen[0].address}–${chosen[0].address + footprint(chosen[0]) - 1}` : "No address yet") : null));
+    if (chosen.length === 1 && chosen[0].notes) card.append(h("p", { class: "muted", style: { fontSize: "13px", marginBottom: 0 } }, chosen[0].notes));
+  }
+
+  refreshTiles();
+  renderPanel();
+  if (S.sim) body.append(h("div", { style: { marginTop: "14px" } }, simBox()));
+}
+
+// ------------------------------------------------------------------ saved colors (shared by all floats)
+function paletteCss(st) {
+  let rgb;
+  if (st.kind === "color") {
+    rgb = hsvToRgb(st.hue || 0, st.sat === undefined ? 1 : st.sat, 1);
+    const w = kelvinToRgb(6500);
+    rgb = rgb.map((c, i) => Math.min(1, c + (st.white || 0) * w[i]));
+  } else rgb = kelvinToRgb(st.cct || 3000);
+  return `rgb(${rgb.map(c => Math.round(c * 255)).join(",")})`;
+}
+
+function paletteChanges(entry, f) {
+  const st = entry.state, v = effVariant(f);
+  const out = {};
+  if (entry.include_dim && st.dim !== undefined) out.dim = st.dim;
+  if (st.kind === "color") {
+    if (v !== "RGBW") return entry.include_dim ? out : null;   // tunable white can't show a color
+    Object.assign(out, { kind: "color", hue: st.hue, sat: st.sat, white: st.white });
+  } else {
+    if (v === "RGBW") Object.assign(out, { kind: "white", cct: st.cct });
+    else if (v === "TW") out.cct = st.cct;
+  }
+  return out;
+}
+
+function paletteSection(fl, chosen, apply, rerender) {
+  const pal = S.project.palette || (S.project.palette = []);
+  const wrap = h("div", { class: "ctl" });
+  wrap.append(h("div", { class: "ctl-label" }, h("span", { class: "kicker small" }, "Saved colors"),
+    chosen.length ? h("button", { class: "btn tiny", onclick: () => saveColor(chosen, fl, rerender) }, "+ Save this color") : null));
+  if (!pal.length) {
+    wrap.append(h("div", { class: "muted", style: { fontSize: "13px" } }, chosen.length
+      ? "Save the selected light's color to reuse it on any light, on any float."
+      : "Colors you save show up here, on every float."));
+    return wrap;
+  }
+  wrap.append(h("div", { class: "presets" }, pal.map(c => h("div", { class: "look-chip" },
+    h("button", {
+      title: c.include_dim ? "Color + brightness" : "Color only",
+      disabled: !chosen.length || null,
+      onclick: () => {
+        let skipped = 0;
+        apply((f) => { const ch = paletteChanges(c, f); if (ch === null) { skipped++; return {}; } return ch; });
+        rerender();
+        toast(skipped ? `Applied “${c.name}”. ${skipped} tunable white light(s) skipped: they can't show a color.` : `Applied “${c.name}”`);
+      },
+    }, h("span", { style: { display: "inline-block", width: "18px", height: "18px", borderRadius: "5px", marginRight: "8px", verticalAlign: "-3px", background: paletteCss(c.state), border: "1px solid rgba(255,255,255,.2)" } }),
+      c.name + (c.include_dim ? " · " + Math.round((c.state.dim || 0) * 100) + "%" : "")),
+    h("button", { class: "more", title: "Rename or delete", onclick: () => colorMenu(c, rerender) }, "⋯")))));
+  if (!chosen.length) wrap.append(h("div", { class: "muted", style: { fontSize: "12px", marginTop: "6px" } }, "Select lights, then tap a saved color to apply it."));
+  return wrap;
+}
+
+function saveColor(chosen, fl, rerender) {
+  const src = chosen[0];
+  const st = stateOf(fl, src);
+  const v = effVariant(src);
+  const state = v === "RGBW" && st.kind === "color"
+    ? { kind: "color", hue: st.hue, sat: st.sat, white: st.white, dim: st.dim }
+    : { kind: "white", cct: st.cct, dim: st.dim };
+  const name = h("input", { class: "f", value: state.kind === "color" ? "Color " + ((S.project.palette || []).length + 1) : Math.round(state.cct) + "K white" });
+  const dimBox = h("input", { type: "checkbox" });
+  const body = h("div", null,
+    h("div", { style: { display: "flex", gap: "14px", alignItems: "center", marginBottom: "12px" } },
+      h("div", { style: { width: "54px", height: "54px", borderRadius: "10px", background: paletteCss(state), border: "1px solid rgba(255,255,255,.2)" } }),
+      h("div", { class: "muted", style: { fontSize: "13px" } }, chosen.length > 1 ? `Taken from ${src.label} (the first selected light).` : `Taken from ${src.label}.`,
+        h("br"), state.kind === "color" ? "RGB color. Tunable white lights can't use it." : "White. Works on tunable white and RGB lights.")),
+    h("div", { class: "field" }, h("label", null, "Name"), name),
+    h("label", { style: { display: "flex", gap: "10px", alignItems: "center", marginTop: "12px" } }, dimBox, `Also save brightness (${Math.round(st.dim * 100)}%)`));
+  modal("Save color", body, [{ label: "Save", cls: "gold", fn: async () => {
+    try {
+      const entry = await api("POST", "/api/palette", { name: name.value.trim() || "Color", state, include_dim: dimBox.checked });
+      (S.project.palette = S.project.palette || []).push(entry);
+      rerender(); toast(`Saved “${entry.name}” for every float`, "ok");
+    } catch (e) { toast(e.message, "bad"); }
+  } }]);
+  setTimeout(() => name.select(), 50);
+}
+
+function colorMenu(c, rerender) {
+  modal("“" + c.name + "”", h("p", { class: "muted" }, c.include_dim ? "Saved color and brightness." : "Saved color only (brightness is left alone when applied)."), [
+    { label: "Rename", fn: async () => { const n = await ask("Rename color", "Name", c.name); if (n) { Object.assign(c, await api("PUT", "/api/palette/" + c.id, { name: n })); rerender(); } } },
+    { label: "Delete", cls: "danger", fn: async () => { await api("DELETE", "/api/palette/" + c.id); S.project.palette = S.project.palette.filter(x => x.id !== c.id); rerender(); } },
+  ]);
+}
+
+function sliderCtl({ label, min, max, step, value, mixed, fmt, track, onInput }) {
+  const valEl = h("span", { class: "val" }, mixed ? "Mixed" : fmt(value));
+  const fill = h("div", { class: "fill", style: { display: track ? "none" : "" } });
+  const thumb = h("div", { class: "thumb" });
+  const sl = h("div", { class: "slider" + (mixed ? " mixed" : ""), role: "slider", "aria-label": label, "aria-valuemin": min, "aria-valuemax": max, "aria-valuenow": value, tabindex: "0" },
+    track ? h("div", { class: "track", style: { background: track } }) : null, fill, thumb);
+  let cur = value;
+  const place = (v) => {
+    const p = (v - min) / (max - min) * 100;
+    thumb.style.left = p + "%"; fill.style.width = p + "%";
+  };
+  place(value);
+  const fromEvent = (e) => {
+    const r = sl.getBoundingClientRect();
+    const x = clamp((e.clientX - r.left) / r.width, 0, 1);
+    let v = min + x * (max - min);
+    v = Math.round(v / step) * step;
+    return clamp(v, min, max);
+  };
+  const set = (v) => {
+    if (v === cur && !mixed) return;
+    mixed = false; sl.classList.remove("mixed");
+    cur = v; place(v); valEl.textContent = fmt(v); sl.setAttribute("aria-valuenow", v);
+    onInput(v);
+  };
+  sl.addEventListener("pointerdown", (e) => { sl.setPointerCapture(e.pointerId); set(fromEvent(e)); });
+  sl.addEventListener("pointermove", (e) => { if (sl.hasPointerCapture(e.pointerId)) set(fromEvent(e)); });
+  sl.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowRight" || e.key === "ArrowUp") { set(clamp(cur + step, min, max)); e.preventDefault(); }
+    if (e.key === "ArrowLeft" || e.key === "ArrowDown") { set(clamp(cur - step, min, max)); e.preventDefault(); }
+  });
+  return h("div", { class: "ctl" }, h("div", { class: "ctl-label" }, h("span", { class: "kicker small" }, label), valEl), sl);
+}
+
+async function flashFixtures(fl, list) {
+  if (!isLive(fl)) { toast("Go live on this float first, so the flash reaches the lights.", "bad"); return; }
+  for (const fx of list) {
+    if (!fx.address) continue;
+    await api("POST", `/api/floats/${fl.id}/flash`, { fixture_id: fx.id, seconds: 6 });
+  }
+  toast("Flashing " + list.length + " for 6 seconds");
+}
+
+function looksCard(fl) {
+  const card = h("div", { class: "card" });
+  card.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Saved looks"),
+    h("button", { class: "btn gold small", onclick: async () => {
+      const name = await ask("Save this look", "Name", "Look " + (fl.looks.length + 1));
+      if (!name) return;
+      const look = await api("POST", `/api/floats/${fl.id}/looks`, { name });
+      fl.looks.push(look); renderMain(); toast("Saved “" + name + "”", "ok");
+    } }, "Save current look")));
+  if (!fl.looks.length) card.append(h("p", { class: "muted", style: { margin: 0 } }, "Nothing saved yet. Looks are stored on the Mac, per float. The live look is kept automatically too."));
+  card.append(h("div", { class: "looks-bar" }, fl.looks.map(l => h("div", { class: "look-chip" },
+    h("button", { onclick: async () => {
+      await api("POST", `/api/floats/${fl.id}/looks/${l.id}/recall`);
+      fl.live = JSON.parse(JSON.stringify(l.states)); renderMain(); toast("Recalled “" + l.name + "”");
+    } }, l.name),
+    h("button", { class: "more", title: "More", onclick: () => lookMenu(fl, l) }, "⋯")))));
+  return card;
+}
+
+function lookMenu(fl, l) {
+  modal("“" + l.name + "”", h("p", { class: "muted" }, "Saved " + new Date(l.created * 1000).toLocaleString()), [
+    { label: "Rename", fn: async () => { const n = await ask("Rename look", "Name", l.name); if (n) { Object.assign(l, await api("PUT", `/api/floats/${fl.id}/looks/${l.id}`, { name: n })); renderMain(); } } },
+    { label: "Overwrite with current", fn: async () => { Object.assign(l, await api("PUT", `/api/floats/${fl.id}/looks/${l.id}`, { overwrite: true })); toast("Updated “" + l.name + "”", "ok"); } },
+    { label: "Delete", cls: "danger", fn: async () => { await api("DELETE", `/api/floats/${fl.id}/looks/${l.id}`); fl.looks = fl.looks.filter(x => x.id !== l.id); renderMain(); } },
+  ]);
+}
+
+// ------------------------------------------------------------------ PATCH tab
+function problemsBox(fl) {
+  const probs = (fl && fl.problems) || [];
+  const box = h("div", { id: "patchProblems" });
+  if (!probs.length) { box.append(h("div", { class: "note ok" }, "Patch looks clean: every fixture has an address and nothing overlaps.")); return box; }
+  const errs = probs.filter(p => p.level === "error"), warns = probs.filter(p => p.level !== "error");
+  if (errs.length) box.append(h("div", { class: "note bad" }, h("strong", null, "Overlaps: "), [...new Set(errs.map(p => p.text))].slice(0, 6).join(" · ")));
+  if (warns.length) box.append(h("div", { class: "note warn", style: { marginTop: "8px" } }, warns.length + " fixture(s) have no DMX address yet."));
+  return box;
+}
+
+function renderPatch(body, fl) {
+  // Float details
+  body.append(h("div", { class: "card" },
+    h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Float details"),
+      h("a", { class: "btn small", href: "/patch/" + fl.id, target: "_blank" }, "Print patch sheet"),
+      h("button", { class: "btn small danger", onclick: async () => {
+        if (!(await confirmBox("Delete float?", `Delete ${fl.name} and its saved looks? This can't be undone (backups are kept on the Mac).`, "Delete", "danger"))) return;
+        await api("DELETE", "/api/floats/" + fl.id);
+        S.project.floats = S.project.floats.filter(f => f.id !== fl.id);
+        S.floatId = S.project.floats[0] ? S.project.floats[0].id : null; renderRail(); renderMain();
+      } }, "Delete float")),
+    h("div", { class: "form-row" },
+      h("div", { class: "field", style: { width: "110px" } }, h("label", null, "Code"), h("input", { class: "f", value: fl.code || "", onchange: e => { fl.code = e.target.value; saveFloat(fl); renderRail(); renderFloatHead(); } })),
+      h("div", { class: "field", style: { flex: 1, minWidth: "220px" } }, h("label", null, "Name"), h("input", { class: "f", value: fl.name, onchange: e => { fl.name = e.target.value; saveFloat(fl); renderRail(); renderFloatHead(); } })),
+      h("div", { class: "field", style: { flex: 2, minWidth: "220px" } }, h("label", null, "Notes"), h("input", { class: "f", value: fl.notes || "", onchange: e => { fl.notes = e.target.value; saveFloat(fl); } })),
+      h("div", { class: "field", style: { minWidth: "260px" } }, h("label", null, "In the parade this float runs"),
+        h("select", { class: "f", onchange: e => { fl.run_mode = e.target.value; saveFloat(fl, true).then(() => { renderRail(); renderMain(); }); } },
+          h("option", { value: "standalone", selected: fl.run_mode !== "live_dmx" }, "On its own (look saved in the fixtures)"),
+          h("option", { value: "live_dmx", selected: fl.run_mode === "live_dmx" }, "On live DMX input (show control)"))))));
+
+  // Boxes
+  const boxes = h("div", { class: "card" });
+  boxes.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "E-Boxes"),
+    h("button", { class: "btn small", onclick: () => discover(fl) }, "Find boxes on network"),
+    h("button", { class: "btn small ghost", onclick: () => { fl.boxes.push({ id: "box_" + uid8(), name: "E-Box " + "ABCDEFGH"[fl.boxes.length], ip: "", udp_port: 6454, net: 0, subnet: 0, universe: 0, notes: "" }); saveFloat(fl, true).then(() => renderMain()); } }, "+ Box")));
+  if (S.discover) boxes.append(discoverResults(fl));
+  for (const b of fl.boxes) boxes.append(boxRow(fl, b));
+  body.append(boxes);
+
+  // Fixtures
+  const fxCard = h("div", { class: "card" });
+  fxCard.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Fixtures"),
+    h("button", { class: "btn small", onclick: () => autoPatch(fl) }, "Auto-address"),
+    h("button", { class: "btn small ghost", onclick: () => { fl.fixtures.push({ id: "fx_" + uid8(), label: "New " + (fl.fixtures.length + 1), type_id: "", variant: "TW", mode: 11, box_id: fl.boxes[0] && fl.boxes[0].id, address: null, uid: null, notes: "" }); saveFloat(fl, true).then(() => renderMain()); } }, "+ Fixture")));
+  fxCard.append(problemsBox(fl));
+  fxCard.append(h("div", { class: "tbl-wrap", style: { marginTop: "10px" } }, fixtureTable(fl)));
+  body.append(fxCard);
+
+  // Scan results
+  for (const b of fl.boxes) if (S.scan[b.id]) body.append(scanCard(fl, b, S.scan[b.id]));
+
+  // Address finder
+  body.append(sweepCard(fl));
+  if (S.sim) body.append(simBox());
+}
+
+function boxRow(fl, b) {
+  const num = (k, lo, hi) => h("input", { class: "f num", type: "number", inputmode: "numeric", min: lo, max: hi, value: b[k],
+    onchange: e => { b[k] = clamp(parseInt(e.target.value || "0", 10), lo, hi); e.target.value = b[k]; saveFloat(fl); } });
+  const scanning = S._scanning === b.id;
+  return h("div", { style: { borderTop: "1px solid var(--line)", paddingTop: "12px", marginTop: "12px" } },
+    h("div", { class: "form-row" },
+      h("div", { class: "field", style: { width: "140px" } }, h("label", null, "Name"), h("input", { class: "f", value: b.name, onchange: e => { b.name = e.target.value; saveFloat(fl); } })),
+      h("div", { class: "field" }, h("label", null, "IP address"), h("input", { class: "f ip", value: b.ip, placeholder: "2.x.x.x", inputmode: "decimal", onchange: e => { b.ip = e.target.value.trim(); saveFloat(fl); renderFloatHead(); } })),
+      h("div", { class: "field" }, h("label", null, "Net"), num("net", 0, 127)),
+      h("div", { class: "field" }, h("label", null, "Sub-Net"), num("subnet", 0, 15)),
+      h("div", { class: "field" }, h("label", null, "Universe"), num("universe", 0, 15)),
+      h("div", { class: "btn-row", style: { marginLeft: "auto" } },
+        h("button", { class: "btn small gold", disabled: !b.ip || scanning, onclick: () => scanBox(fl, b) }, scanning ? "Scanning…" : "Scan fixtures (RDM)"),
+        b.ip ? h("a", { class: "btn small", href: "http://" + b.ip, target: "_blank", title: "The box's own web page. Login robe / 2479" }, "Open REAP") : null,
+        fl.boxes.length > 1 ? h("button", { class: "btn small ghost", onclick: async () => {
+          if (!(await confirmBox("Remove box?", `Remove ${b.name}? Its fixtures move to the first remaining box.`, "Remove", "danger"))) return;
+          fl.boxes = fl.boxes.filter(x => x.id !== b.id); await saveFloat(fl, true); renderMain();
+        } }, "Remove") : null)),
+    h("div", { class: "muted", style: { fontSize: "12px", marginTop: "6px" } },
+      "Match the box menu: Personality › Ethernet Settings › ArtNet Settings (Net / Sub-Net / Universe). REAP login is robe / 2479."));
+}
+
+async function discover(fl) {
+  toast("Looking for boxes…");
+  try {
+    const r = await api("POST", "/api/discover", { targets: fl.boxes.filter(b => b.ip).map(b => ({ ip: b.ip, udp_port: b.udp_port })), wait: 2.0 });
+    S.discover = r.nodes;
+    renderMain();
+    if (!r.nodes.length) toast("No Art-Net devices answered. Check the cable, the Mac's Ethernet IP (2.0.0.10), and that the box is set to Ethernet.", "bad");
+  } catch (e) { toast(e.message, "bad"); }
+}
+
+function discoverResults(fl) {
+  const nodes = S.discover || [];
+  const wrap = h("div", { class: "note", style: { marginBottom: "6px" } });
+  wrap.append(h("div", { class: "kicker small", style: { marginBottom: "8px" } }, nodes.length + " device(s) answered"));
+  if (!nodes.length) wrap.append(h("div", null, "Nothing answered. See Setup › Field checklist."));
+  const t = h("table", { class: "tbl" }, h("tr", null, ["Name", "IP", "Art-Net", "RDM", ""].map(x => h("th", null, x))));
+  for (const n of nodes) {
+    const pa = (n.output_port_addresses || [])[0];
+    const nsu = pa === undefined ? "–" : `${(pa >> 8) & 127} : ${(pa >> 4) & 15} : ${pa & 15}`;
+    t.append(h("tr", null,
+      h("td", null, h("div", { style: { fontWeight: 600 } }, n.long_name || n.short_name), h("div", { class: "uid" }, n.mac)),
+      h("td", { class: "mono" }, n.ip + (n.udp_port !== 6454 ? ":" + n.udp_port : "")),
+      h("td", { class: "mono" }, nsu),
+      h("td", null, n.rdm_capable ? "yes" : "?"),
+      h("td", null, h("div", { class: "btn-row" }, fl.boxes.map(b => h("button", { class: "btn tiny", onclick: () => {
+        b.ip = n.ip; b.udp_port = n.udp_port || 6454;
+        if (pa !== undefined) { b.net = (pa >> 8) & 127; b.subnet = (pa >> 4) & 15; b.universe = pa & 15; }
+        saveFloat(fl, true).then(() => { S.discover = null; renderMain(); toast(b.name + " set to " + n.ip, "ok"); });
+      } }, "Use for " + b.name))))));
+  }
+  wrap.append(h("div", { class: "tbl-wrap" }, t));
+  wrap.append(h("button", { class: "btn tiny ghost", style: { marginTop: "8px" }, onclick: () => { S.discover = null; renderMain(); } }, "Hide"));
+  return wrap;
+}
+
+function fixtureTable(fl) {
+  const t = h("table", { class: "tbl" });
+  t.append(h("tr", null, ["", "Fixture", "Type", "Mode", fl.boxes.length > 1 ? "Box" : null, "Address", "Channels", "RDM UID", ""].filter(x => x !== null).map(x => h("th", null, x))));
+  const errIds = new Set((fl.problems || []).filter(p => p.level === "error").map(p => p.fixture));
+  fl.fixtures.forEach((fx, idx) => {
+    const st = stateOf(fl, fx);
+    const modeOpts = Object.values(MODES[fx.variant] || {}).map(m => h("option", { value: m.mode, selected: m.mode === fx.mode }, m.name));
+    if (fx.variant === "TW") modeOpts.push(h("option", { value: 7, selected: fx.mode === 7 }, "Mode 7 - Full control (untested on TW)"));
+    const fp = footprint(fx);
+    t.append(h("tr", { class: errIds.has(fx.id) ? "err" : "" },
+      h("td", null, h("div", { style: { width: "26px", height: "26px", borderRadius: "6px", background: previewCss(fx, st), border: "1px solid rgba(255,255,255,.1)" } })),
+      h("td", null, h("input", { class: "f", style: { minWidth: "110px" }, value: fx.label, onchange: e => { fx.label = e.target.value; saveFloat(fl); } }),
+        fx.notes ? h("div", { class: "muted", style: { fontSize: "11px", marginTop: "3px", maxWidth: "260px" } }, fx.notes) : null),
+      h("td", null, h("select", { class: "f", onchange: e => { fx.variant = e.target.value; fx.mode = { TW: 11, RGBW: 1, PW: 13 }[fx.variant]; saveFloat(fl, true).then(() => renderMain()); } },
+        [["TW", "Tunable white"], ["RGBW", "RGB + White"], ["PW", "Single white"]].map(([v, l]) => h("option", { value: v, selected: v === fx.variant }, l)))),
+      h("td", null, h("select", { class: "f", onchange: e => { fx.mode = parseInt(e.target.value, 10); saveFloat(fl, true).then(() => renderMain()); } }, modeOpts)),
+      fl.boxes.length > 1 ? h("td", null, h("select", { class: "f", onchange: e => { fx.box_id = e.target.value; saveFloat(fl); } }, fl.boxes.map(b => h("option", { value: b.id, selected: b.id === fx.box_id }, b.name)))) : null,
+      h("td", null, h("input", { class: "f num", type: "number", inputmode: "numeric", min: 1, max: 512, value: fx.address || "", placeholder: "–",
+        onchange: e => { const v = parseInt(e.target.value, 10); fx.address = isNaN(v) ? null : clamp(v, 1, 512); saveFloat(fl, true).then(() => { e.target.closest("tr").querySelector(".chans").textContent = fx.address ? `${fx.address}–${fx.address + fp - 1}` : "–"; }); } })),
+      h("td", { class: "mono chans", style: { whiteSpace: "nowrap" } }, fx.address ? `${fx.address}–${fx.address + fp - 1}` : "–"),
+      h("td", { class: "uid" }, fx.uid || ""),
+      h("td", null, h("div", { class: "btn-row", style: { flexWrap: "nowrap" } },
+        h("button", { class: "btn tiny", disabled: !fx.address, onclick: () => flashFixtures(fl, [fx]) }, "Flash"),
+        h("button", { class: "btn tiny ghost", title: "Move up", disabled: idx === 0, onclick: () => { fl.fixtures.splice(idx - 1, 0, fl.fixtures.splice(idx, 1)[0]); saveFloat(fl, true).then(() => renderMain()); } }, "↑"),
+        h("button", { class: "btn tiny ghost", onclick: async () => {
+          if (!(await confirmBox("Remove fixture?", `Remove ${fx.label} from this float?`, "Remove", "danger"))) return;
+          fl.fixtures = fl.fixtures.filter(x => x.id !== fx.id); delete fl.live[fx.id]; await saveFloat(fl, true); renderMain();
+        } }, "✕")))));
+  });
+  return t;
+}
+
+async function autoPatch(fl) {
+  const boxes = fl.boxes;
+  const body = h("div");
+  const start = h("input", { class: "f num", type: "number", value: 1, min: 1, max: 512 });
+  const boxSel = h("select", { class: "f" }, boxes.map(b => h("option", { value: b.id }, b.name)));
+  body.append(h("p", null, "Gives every fixture on the box its own block of channels, top to bottom in the list, based on each fixture's mode. The new addresses still have to be sent to the fixtures: use Scan › Send addresses, or set them in REAP."),
+    h("div", { class: "form-row" }, boxes.length > 1 ? h("div", { class: "field" }, h("label", null, "Box"), boxSel) : null,
+      h("div", { class: "field" }, h("label", null, "Start at"), start)));
+  modal("Auto-address", body, [{ label: "Auto-address", cls: "gold", fn: async () => {
+    try {
+      await api("POST", `/api/floats/${fl.id}/autopatch`, { box_id: boxSel.value, start: parseInt(start.value, 10) || 1 });
+      await reloadFloat(fl.id); renderMain(); toast("Addresses assigned", "ok");
+    } catch (e) { toast(e.message, "bad"); }
+  } }]);
+}
+
+async function reloadFloat(fid) {
+  const fresh = await api("GET", "/api/floats/" + fid);
+  const i = S.project.floats.findIndex(f => f.id === fid);
+  S.project.floats[i] = fresh;
+  await refreshProblems();
+  return fresh;
+}
+
+async function scanBox(fl, b) {
+  S._scanning = b.id; renderMain();
+  try {
+    const r = await api("POST", `/api/floats/${fl.id}/scan`, { box_id: b.id });
+    S.scan[b.id] = r;
+    const n = r.devices.length;
+    toast(n ? `Found ${n} fixture(s) on ${b.name}` : `${b.name} answered but reported no fixtures`, n ? "ok" : "bad");
+  } catch (e) {
+    S.scan[b.id] = { error: e.message, devices: [] };
+    toast(e.message, "bad");
+  } finally { S._scanning = null; renderMain(); }
+}
+
+function scanCard(fl, b, res) {
+  const card = h("div", { class: "card" });
+  card.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Scan of " + b.name),
+    res.devices.length ? h("button", { class: "btn small", title: "Pair unlinked scanned fixtures with unlinked patch fixtures, in address order", onclick: () => linkInOrder(fl, b, res) }, "Link in order") : null,
+    res.devices.length ? h("button", { class: "btn small gold", onclick: () => applyScan(fl, b, res) }, "Use scan for patch") : null,
+    h("button", { class: "btn small ghost", onclick: () => { delete S.scan[b.id]; renderMain(); } }, "Hide")));
+  if (res.error) {
+    card.append(h("div", { class: "note bad" }, res.error),
+      h("p", null, "The box didn't answer RDM over the network. That's OK: set addresses and modes in the box's own page (REAP) or in Robe Toolkit, type them in the Fixtures table above, and use the Address finder below to check."),
+      b.ip ? h("a", { class: "btn small", href: "http://" + b.ip, target: "_blank" }, "Open REAP") : null);
+    return card;
+  }
+  const byUid = Object.fromEntries(fl.fixtures.filter(f => f.uid).map(f => [f.uid, f]));
+  const counts = {};
+  res.devices.forEach(d => { if (d.address) counts[d.address] = (counts[d.address] || 0) + 1; });
+  const expected = fl.fixtures.filter(f => f.box_id === b.id).length;
+  card.append(h("div", { class: "note " + (res.devices.length === expected ? "ok" : "warn"), style: { marginBottom: "10px" } },
+    `Found ${res.devices.length} · schedule expects ${expected} on this box.`,
+    Object.values(counts).some(c => c > 1) ? " Some fixtures share an address; they will show the same look." : ""));
+  const t = h("table", { class: "tbl" }, h("tr", null, ["RDM UID", "Found as", "Address", "Mode", "Linked fixture", ""].map(x => h("th", null, x))));
+  for (const d of res.devices) {
+    if (!d.ok) { t.append(h("tr", { class: "err" }, h("td", { class: "uid" }, d.uid), h("td", { colspan: 5 }, d.error))); continue; }
+    const linked = byUid[d.uid];
+    const addr = h("input", { class: "f num", type: "number", min: 1, max: 512, value: d.address || "" });
+    const variant = d.variant_guess;
+    const avail = (d.modes_available && d.modes_available.length) ? d.modes_available : Object.keys(MODES[variant] || {}).map(Number);
+    const modeSel = h("select", { class: "f" }, avail.map(m => h("option", { value: m, selected: m === d.mode }, "Mode " + m + " (" + (((MODES[variant] || MODES.RGBW)[m] || {}).footprint || "?") + " ch)")));
+    if (!(d.uid in S.links)) S.links[d.uid] = linked ? linked.id : "";
+    const cur = S.links[d.uid];
+    const linkSel = h("select", { class: "f", onchange: e => { S.links[d.uid] = e.target.value; } },
+      h("option", { value: "" }, "— not linked —"),
+      fl.fixtures.filter(f => f.box_id === b.id).map(f => h("option", { value: f.id, selected: cur === f.id }, f.label + (f.uid && f.uid !== d.uid ? " (linked elsewhere)" : ""))),
+      h("option", { value: "__new", selected: cur === "__new" }, "+ Add as new fixture"));
+    const doRdm = async (action, extra) => {
+      try {
+        const r = await api("POST", `/api/floats/${fl.id}/rdm`, Object.assign({ box_id: b.id, uid: d.uid, action }, extra || {}));
+        Object.assign(d, { address: r.info.address, mode: r.info.mode, personality: r.info.personality });
+        toast(action === "identify" ? "Identify sent" : "Done", "ok");
+        if (action === "address" || action === "mode") await reloadFloat(fl.id);
+        renderMain();
+      } catch (e) { toast(e.message, "bad"); }
+    };
+    t.append(h("tr", null,
+      h("td", null, h("div", { class: "uid" }, d.uid), d.label ? h("div", { style: { fontSize: "12px" } }, d.label) : null),
+      h("td", null, h("div", null, d.kind === "ebox" ? "E-Box itself" : variant === "RGBW" ? "RGB + White" : variant === "TW" ? "Tunable white" : "Single white"), h("div", { class: "muted", style: { fontSize: "11px" } }, d.model || "")),
+      h("td", null, h("div", { class: "btn-row", style: { flexWrap: "nowrap" } }, addr, h("button", { class: "btn tiny", onclick: () => doRdm("address", { address: parseInt(addr.value, 10) }) }, "Set")),
+        counts[d.address] > 1 ? h("div", { style: { color: "var(--warn)", fontSize: "11px" } }, "shared address") : null),
+      h("td", null, h("div", { class: "btn-row", style: { flexWrap: "nowrap" } }, modeSel, h("button", { class: "btn tiny", onclick: () => doRdm("mode", { mode: parseInt(modeSel.value, 10) }) }, "Set"))),
+      h("td", null, linkSel),
+      h("td", null, h("div", { class: "btn-row", style: { flexWrap: "nowrap" } },
+        h("button", { class: "btn tiny", onclick: () => doRdm("identify", { on: true }) }, "Identify"),
+        h("button", { class: "btn tiny ghost", onclick: () => doRdm("identify", { on: false }) }, "Stop"),
+        h("button", { class: "btn tiny ghost", title: "Manufacturer settings (RDM)", onclick: () => paramsModal(fl, b, d) }, "Settings")))));
+  }
+  card.append(h("div", { class: "tbl-wrap" }, t));
+  card.append(h("hr", { class: "rule" }),
+    h("div", { class: "btn-row" },
+      h("button", { class: "btn small", onclick: () => pushAddresses(fl, b, res) }, "Send patch addresses to fixtures"),
+      h("span", { class: "muted", style: { fontSize: "13px" } }, "Writes each linked fixture's address and mode from the Fixtures table into the real fixture.")));
+  return card;
+}
+
+function linkInOrder(fl, b, res) {
+  const taken = new Set(Object.values(S.links).filter(Boolean));
+  const freeFx = fl.fixtures.filter(f => f.box_id === b.id && !taken.has(f.id) && (!f.uid || !res.devices.some(d => d.uid === f.uid)));
+  const devs = res.devices.filter(d => d.ok && !S.links[d.uid]).sort((a, c) => (a.address || 999) - (c.address || 999) || a.uid.localeCompare(c.uid));
+  let n = 0;
+  devs.forEach((d, i) => { if (freeFx[i]) { S.links[d.uid] = freeFx[i].id; n++; } });
+  renderMain();
+  toast(n ? `Paired ${n}. Check with Identify, then press Use scan for patch.` : "Nothing left to pair");
+}
+
+async function applyScan(fl, b, res) {
+  let linked = 0, added = 0;
+  for (const d of res.devices) {
+    if (!d.ok) continue;
+    const choice = S.links[d.uid];
+    if (choice === "__new") {
+      fl.fixtures.push({ id: "fx_" + uid8(), label: d.label || ("Found " + d.uid.slice(-4)), type_id: "", variant: d.variant_guess, mode: d.mode, box_id: b.id, address: d.address, uid: d.uid, notes: d.model || "" });
+      S.links[d.uid] = fl.fixtures[fl.fixtures.length - 1].id;
+      added++;
+      continue;
+    }
+    if (!choice) continue;
+    const fx = fl.fixtures.find(f => f.id === choice);
+    if (!fx) continue;
+    for (const other of fl.fixtures) if (other.uid === d.uid && other !== fx) other.uid = null;
+    fx.uid = d.uid; fx.address = d.address; fx.variant = d.variant_guess;
+    if (d.mode) fx.mode = d.mode;
+    linked++;
+  }
+  await saveFloat(fl, true);
+  renderMain();
+  toast(`Linked ${linked}, added ${added}. Unlinked fixtures were left alone.`, "ok");
+}
+
+async function pushAddresses(fl, b, res) {
+  const todo = fl.fixtures.filter(f => f.box_id === b.id && f.uid && f.address && res.devices.some(d => d.uid === f.uid));
+  if (!todo.length) { toast("Link scanned fixtures to the patch first (Linked fixture column, then Use scan for patch).", "bad"); return; }
+  if (!(await confirmBox("Send addresses?", `Write address and mode to ${todo.length} fixture(s) on ${b.name}?`, "Send"))) return;
+  let ok = 0; const errs = [];
+  await api("POST", "/api/output", { action: "hold", on: true });
+  try {
+    for (const fx of todo) {
+      const d = res.devices.find(x => x.uid === fx.uid);
+      try {
+        if (d.mode !== fx.mode) await api("POST", `/api/floats/${fl.id}/rdm`, { box_id: b.id, uid: fx.uid, action: "mode", mode: fx.mode });
+        const r = await api("POST", `/api/floats/${fl.id}/rdm`, { box_id: b.id, uid: fx.uid, action: "address", address: fx.address });
+        Object.assign(d, { address: r.info.address, mode: r.info.mode }); ok++;
+      } catch (e) { errs.push(fx.label + ": " + e.message); }
+    }
+  } finally {
+    await api("POST", "/api/output", { action: "hold", on: false });
+  }
+  await reloadFloat(fl.id);
+  renderMain();
+  if (errs.length) modal("Some fixtures didn't take it", h("ul", null, errs.map(e => h("li", null, e))));
+  else toast(`Sent to ${ok} fixture(s)`, "ok");
+}
+
+// ------------------------------------------------------------------ address finder
+function sweepCard(fl) {
+  const card = h("div", { class: "card" });
+  const boxSel = h("select", { class: "f" }, fl.boxes.map(b => h("option", { value: b.id }, b.name + (b.ip ? " · " + b.ip : " (no IP)"))));
+  const modeSel = h("select", { class: "f" }, MODE_LIST.map(m => h("option", { value: m.variant + ":" + m.mode, selected: m.variant === "TW" && m.mode === 11 }, (m.variant === "RGBW" ? "RGB+W " : m.variant + " ") + m.name)));
+  const start = h("input", { class: "f num", type: "number", value: 1, min: 1, max: 512 });
+  const count = h("input", { class: "f num", type: "number", value: 30, min: 1, max: 170 });
+  const secs = h("input", { class: "f num", type: "number", value: 2.5, min: 0.5, max: 10, step: 0.5 });
+  card.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Address finder"), h("span", { class: "kicker small" }, "Works without RDM")),
+    h("p", { class: "muted", style: { marginTop: 0 } }, "Lights one fixture-sized block at a time, starting at the address you give, while everything else goes dark. Watch the float: when a light comes on, the big number is its address."),
+    h("div", { class: "form-row" },
+      h("div", { class: "field" }, h("label", null, "Box"), boxSel),
+      h("div", { class: "field", style: { minWidth: "240px" } }, h("label", null, "Fixture mode"), modeSel),
+      h("div", { class: "field" }, h("label", null, "Start"), start),
+      h("div", { class: "field" }, h("label", null, "Steps"), count),
+      h("div", { class: "field" }, h("label", null, "Seconds"), secs),
+      h("button", { class: "btn gold", onclick: async () => {
+        const [variant, mode] = modeSel.value.split(":");
+        try {
+          await api("POST", `/api/floats/${fl.id}/sweep`, { box_id: boxSel.value, variant, mode: parseInt(mode, 10), start: parseInt(start.value, 10), count: parseInt(count.value, 10), seconds: parseFloat(secs.value) });
+          await pollStatus(); renderFloatHead();
+        } catch (e) { toast(e.message, "bad"); }
+      } }, "Start")),
+    sweepBox());
+  return card;
+}
+
+function sweepBox() {
+  const sw = S.engine.sweep;
+  const box = h("div", { id: "sweepBox" });
+  if (!sw) return box;
+  const fl = curFloat();
+  const ctl = (a) => api("POST", `/api/floats/${fl.id}/sweep`, { action: a }).then(pollStatus);
+  box.append(h("div", { class: "note", style: { marginTop: "14px", display: "flex", alignItems: "center", gap: "18px", flexWrap: "wrap" } },
+    h("div", null, h("div", { class: "kicker small" }, "Now lit"), h("div", { style: { font: "900 48px/1 var(--serif)", color: "var(--champagne)" } }, sw.current),
+      h("div", { class: "muted", style: { fontSize: "12px" } }, `${sw.footprint} ch · step ${sw.index + 1} of ${sw.addresses.length}${sw.paused ? " · paused" : ""}`)),
+    h("div", { class: "btn-row" },
+      h("button", { class: "btn small", onclick: () => ctl("prev") }, "‹ Prev"),
+      sw.paused ? h("button", { class: "btn small", onclick: () => ctl("resume") }, "Resume") : h("button", { class: "btn small", onclick: () => ctl("pause") }, "Pause"),
+      h("button", { class: "btn small", onclick: () => ctl("next") }, "Next ›"),
+      h("button", { class: "btn small danger", onclick: () => ctl("stop") }, "Stop"))));
+  return box;
+}
+
+// ------------------------------------------------------------------ virtual box
+function simBox() {
+  const box = h("div", { id: "simBox" });
+  if (!S.sim) return box;
+  const card = h("div", { class: "card" });
+  card.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Virtual E-Box (simulator)"),
+    h("span", { class: "kicker small" }, `${S.sim.ip}:${S.sim.port} · Art-Net ${S.sim.net}:${S.sim.subnet}:${S.sim.universe} · ${S.sim.receiving ? "receiving" : "idle"}`)));
+  card.append(h("div", { class: "sim-row" }, S.sim.modules.map(m => h("div", { class: "sim-mod" },
+    h("div", { class: "bulb", style: { background: `rgb(${m.rgb.join(",")})`, color: `rgb(${m.rgb.join(",")})` } }),
+    h("div", { class: "uid" }, m.uid),
+    h("div", { style: { fontSize: "12px" } }, `${m.variant} · M${m.mode} · @${m.address}`),
+    m.saved_initial ? h("div", { style: { fontSize: "11px", color: "var(--ok)" } }, "look saved") : null))));
+  box.append(card);
+  return box;
+}
+
+// ------------------------------------------------------------------ SAVE tab
+function jobBox() {
+  const job = S.engine.job;
+  const box = h("div", { id: "jobBox" });
+  const fl = curFloat();
+  if (!job || !fl || job.float !== fl.id) return box;
+  const running = job.state === "running";
+  box.append(h("div", { class: "note " + (job.state === "done" ? "ok" : job.state === "error" ? "bad" : ""), style: { marginTop: "14px" } },
+    h("div", { style: { fontWeight: 700, marginBottom: "6px" } }, (job.kind === "verify" ? "Check: " : "Save: ") + job.step),
+    h("div", { class: "progress" }, h("div", { style: { width: Math.round(job.progress * 100) + "%" } })),
+    job.message ? h("div", { style: { marginTop: "6px" } }, job.message) : null,
+    job.skipped && job.skipped.length ? h("div", { style: { marginTop: "6px", fontSize: "13px" } }, "Skipped: " + job.skipped.map(s => s.label + " (" + s.why + ")").join(", ")) : null,
+    !running && job.state === "done" && job.kind === "save" ? h("div", { style: { marginTop: "6px" } }, "Next: press “Check what’s saved” and watch the float.") : null));
+  return box;
+}
+
+async function paramsModal(fl, b, d) {
+  const body = h("div", null, h("p", { class: "muted" }, "Reading settings from " + d.uid + "…"));
+  modal("Fixture settings", body);
+  try {
+    const r = await api("POST", `/api/floats/${fl.id}/rdm`, { box_id: b.id, uid: d.uid, action: "params" });
+    body.innerHTML = "";
+    body.append(h("p", { class: "muted", style: { marginTop: 0 } }, `${d.model || "Fixture"} · ${d.uid}. These are the maker's own settings, read from the fixture. Change only what you understand.`));
+    if (!r.params.length) { body.append(h("div", { class: "note warn" }, "This fixture didn't list any manufacturer settings over RDM.")); return; }
+    const t = h("table", { class: "tbl" }, h("tr", null, ["Setting", "Now", "Range", ""].map(x => h("th", null, x))));
+    for (const p of r.params) {
+      const inp = h("input", { class: "f num", type: "number", value: p.value === null ? "" : p.value, min: p.min, max: p.max });
+      t.append(h("tr", null,
+        h("td", null, h("div", { style: { fontWeight: 600 } }, p.description), h("div", { class: "uid" }, p.pid_hex + " · " + p.data_type + " · " + p.command_class),
+          r.save_pid === p.pid ? h("div", { style: { color: "var(--gold)", fontSize: "12px" } }, "Save-look setting: 1 = keep the current look") : null),
+        h("td", { class: "mono" }, p.value === null ? "–" : p.value),
+        h("td", { class: "mono" }, p.min + "–" + p.max),
+        h("td", null, p.can_set ? h("div", { class: "btn-row", style: { flexWrap: "nowrap" } }, inp,
+          h("button", { class: "btn tiny", onclick: async () => {
+            try { await api("POST", `/api/floats/${fl.id}/rdm`, { box_id: b.id, uid: d.uid, action: "set_param", pid: p.pid, value: parseInt(inp.value, 10) }); toast(p.description + " set", "ok"); paramsModal(fl, b, d); }
+            catch (e) { toast(e.message, "bad"); }
+          } }, "Set")) : h("span", { class: "muted" }, "read only"))));
+    }
+    body.append(h("div", { class: "tbl-wrap" }, t));
+  } catch (e) { body.innerHTML = ""; body.append(h("div", { class: "note bad" }, e.message)); }
+}
+
+function renderLiveDmxSetup(body, fl) {
+  const probs = fl.problems || [];
+  const unaddressed = fl.fixtures.filter(f => !f.address);
+  const unlinked = fl.fixtures.filter(f => !f.uid);
+  body.append(h("div", { class: "card" },
+    h("h2", null, "Live DMX float"),
+    h("p", null, "In the parade this float takes live DMX from show control, so nothing gets saved into the fixtures. What matters is that every Calumma has its own address, in the mode the programmer expects, and that the box passes the incoming DMX through."),
+    h("div", { class: "grid-2" },
+      h("div", { class: "note " + (probs.some(p => p.level === "error") ? "bad" : unaddressed.length ? "warn" : "ok") },
+        probs.some(p => p.level === "error") ? "Some addresses overlap. Fix them on the Patch tab." : unaddressed.length ? unaddressed.length + " fixture(s) still need an address." : "Every fixture has its own address."),
+      h("div", { class: "note " + (unlinked.length ? "warn" : "ok") },
+        unlinked.length ? unlinked.length + " fixture(s) aren't linked to a scanned fixture, so their addresses haven't been confirmed in the hardware." : "Every fixture is linked to real hardware."))));
+  const steps = h("ol", { class: "steps" },
+    h("li", null, h("h3", null, "Address every fixture"),
+      h("p", null, "Patch tab: Scan fixtures, Link in order, check each with Identify, Use scan for patch, then Auto-address and Send patch addresses to fixtures. Pick the mode the show-control programmer wants first (Mode 11 is 3 channels per tunable white fixture)."),
+      h("button", { class: "btn small", onclick: () => { S.tab = "patch"; renderMain(); } }, "Go to Patch")),
+    h("li", null, h("h3", null, "Check each address"),
+      h("p", null, "Go live and use Flash on each fixture, or run the Address finder. Every light should answer on its own.")),
+    h("li", null, h("h3", null, "Hand the patch to show control"),
+      h("p", null, "Print the patch sheet (fixture, mode, channels) for whoever programs the parade."),
+      h("a", { class: "btn small gold", href: "/patch/" + fl.id, target: "_blank" }, "Print patch sheet")),
+    h("li", null, h("h3", null, "Set the box for the parade input"),
+      h("p", null, "Leave Output Data on Enabled. If show control arrives on a DMX cable, set Personality › DMX Input to Wired DMX. If it arrives over the network, keep Ethernet and match the Art-Net Net / Sub-Net / Universe. Power-cycle the box after changing settings, then press Release here so this app stops sending.")));
+  body.append(h("div", { class: "card" }, steps));
+}
+
+function renderSave(body, fl) {
+  if (fl.run_mode === "live_dmx") return renderLiveDmxSetup(body, fl);
+  const m7 = fl.fixtures.filter(f => f.mode === 7);
+  const rgbNot7 = fl.fixtures.filter(f => f.variant === "RGBW" && f.mode !== 7);
+  const tw = fl.fixtures.filter(f => f.variant !== "RGBW" && f.mode !== 7);
+  const ready = m7.filter(f => f.address);
+  const linked = fl.fixtures.filter(f => f.uid && f.address);
+  const busy = S.engine.job && S.engine.job.state === "running";
+
+  body.append(h("div", { class: "card" },
+    h("h2", null, "Make this float run on its own"),
+    h("p", null, "For the parade, each float plays its look with nothing connected. The fixtures can store one look and come up in it at power-on. Anolis documents two ways to store it. Try option 1 first; it works in any mode, including tunable white."),
+    h("div", { class: "grid-2" },
+      h("div", { class: "note " + (linked.length ? "ok" : "warn") }, h("strong", null, "Option 1 (RDM): "), linked.length + " of " + fl.fixtures.length + " fixture(s) linked by Scan and ready."),
+      h("div", { class: "note " + (ready.length ? "ok" : "warn") }, h("strong", null, "Option 2 (Mode 7): "), ready.length + " fixture(s) in Mode 7 with an address."))));
+
+  body.append(h("div", { class: "card" },
+    h("div", { class: "card-head" }, h("h2", { class: "grow" }, "Option 1: save by RDM"), h("span", { class: "kicker small" }, "E-Box manual v1.6")),
+    h("p", null, "Sets the fixture's own “Init position LEDs” setting to 1, which tells it to keep what it is showing right now as its power-on look. The app finds that setting by name in each fixture's settings list. Fixtures must be linked by Scan (Patch tab)."),
+    h("ol", { class: "steps" },
+      h("li", null, h("h3", null, "Set the look"), h("p", null, "On the Look tab, with this float live."),
+        h("button", { class: "btn small", onclick: () => { S.tab = "look"; renderMain(); } }, "Go to Look")),
+      h("li", null, h("h3", null, "Save it"), h("p", null, "Keep the float live while you press this, so the fixtures are showing the look."),
+        h("button", { class: "btn gold", disabled: !linked.length || busy, onclick: () => runSaveRdm(fl, linked) }, `Save look into ${linked.length} fixture(s) by RDM`)),
+      h("li", null, h("h3", null, "Check it"), h("p", null, "Press Release (top right) so this app stops sending. If the fixtures stay in the look, it worked. If they drop out, set the box's Output Data to Disabled and power-cycle it (see the last card), then check again.")))));
+
+  const steps = h("ol", { class: "steps" });
+  steps.append(
+    h("li", null, h("h3", null, "Switch the fixtures to Mode 7"),
+      h("p", null, "Mode 7 uses 15 channels per fixture, so the addresses change too. With RDM working, this button sets Mode 7, re-addresses the box from channel 1, and writes the new addresses. Without RDM, do it in REAP (Devices › each module › DMX preset 7 and address), then type the same values on the Patch tab."),
+      h("div", { class: "btn-row" },
+        h("button", { class: "btn small", disabled: !rgbNot7.length, onclick: () => toMode7(fl, rgbNot7) }, `Set ${rgbNot7.length} RGB fixture(s) to Mode 7`),
+        tw.length ? h("button", { class: "btn small ghost", onclick: () => toMode7(fl, tw) }, `Try Mode 7 on ${tw.length} tunable white`) : null),
+      tw.length ? h("div", { class: "note warn", style: { marginTop: "10px", fontSize: "13px" } },
+        "Tunable white: the Calumma chart lists Modes 11, 12 and 13 only, with no save channel. Use option 1 for these. Only try Mode 7 if a Scan shows the fixture offers it.") : null),
+    h("li", null, h("h3", null, "Set the look"),
+      h("p", null, "Build the look on the Look tab with this float live. What you see is what gets saved.")),
+    h("li", null, h("h3", null, "Save into the fixtures"),
+      h("p", null, "Holds the fixtures’ save command for about 5 seconds (the manual asks for at least 3), then lets go."),
+      h("button", { class: "btn gold", disabled: !ready.length || busy, onclick: () => runSave(fl, ready, false) }, `Save look into ${ready.length} fixture(s)`)),
+    h("li", null, h("h3", null, "Check what’s saved"),
+      h("p", null, "Blacks out the live look and asks the fixtures to show their stored look for 6 seconds. If they light up correctly, the save worked."),
+      h("button", { class: "btn", disabled: !ready.length || busy, onclick: () => runSave(fl, ready, true) }, "Check what’s saved")));
+  body.append(h("div", { class: "card" },
+    h("div", { class: "card-head" }, h("h2", { class: "grow" }, "Option 2: save with Mode 7"), h("span", { class: "kicker small" }, "E-Box manual v2.5")),
+    steps, jobBox()));
+
+  body.append(h("div", { class: "card" },
+    h("h2", null, "Last step, on the box"),
+    h("p", null, "If the saved look doesn't come up on its own: on the E-Box menu set Personality › Output Data › Disabled (or REAP › Personality › Output Data › Disabled, then the red “Reset now”). Power the box off and on. The fixtures should come up in the saved look with nothing connected."),
+    h("div", { class: "note", style: { fontSize: "13px" } }, h("strong", null, "To undo later: "), "set Output Data back to Enabled and power-cycle. Until you do, this app (and any console) can't control that float.")));
+
+  const list = h("div", { class: "card" });
+  list.append(h("h3", null, "Fixture status"));
+  const t = h("table", { class: "tbl" }, h("tr", null, ["Fixture", "Type", "Mode", "Address", "Option 1", "Option 2"].map(x => h("th", null, x))));
+  const ok = (txt) => h("span", { style: { color: "var(--ok)" } }, txt);
+  for (const f of fl.fixtures) t.append(h("tr", null, h("td", null, f.label), h("td", null, f.variant === "RGBW" ? "RGB + White" : f.variant),
+    h("td", null, "Mode " + f.mode), h("td", { class: "mono" }, f.address || "–"),
+    h("td", null, f.uid && f.address ? ok("ready") : "needs Scan link"),
+    h("td", null, f.mode === 7 && f.address ? ok("ready") : f.mode !== 7 ? "needs Mode 7" : "needs address")));
+  list.append(h("div", { class: "tbl-wrap" }, t));
+  body.append(list);
+}
+
+async function runSaveRdm(fl, list) {
+  if (!isLive(fl)) {
+    if (!(await confirmBox("Go live?", `${fl.name} isn't live, so the fixtures aren't showing the look yet. Go live on it first?`, "Go live"))) return;
+    await goLive(fl);
+    await new Promise(r => setTimeout(r, 800));
+  }
+  toast("Saving by RDM…");
+  try {
+    const r = await api("POST", `/api/floats/${fl.id}/save_rdm`, { fixture_ids: list.map(f => f.id) });
+    const bad = r.results.filter(x => !x.ok);
+    modal(r.saved ? `Saved into ${r.saved} fixture(s)` : "Nothing was saved",
+      h("div", null,
+        r.saved ? h("div", { class: "note ok" }, `Sent “${(r.results.find(x => x.ok) || {}).param}” = 1. Now press Release and see if the look holds.`) : null,
+        bad.length ? h("div", { class: "note bad", style: { marginTop: "8px" } }, h("strong", null, bad.length + " not saved:"),
+          h("ul", null, bad.map(x => h("li", null, x.label + ": " + x.why)))) : null,
+        bad.length ? h("p", { class: "muted", style: { fontSize: "13px" } }, "If a fixture has no “Init position” setting, open Patch › Scan › Settings on it to see what it does offer, or use option 2.") : null));
+  } catch (e) { toast(e.message, "bad"); }
+}
+
+async function runSave(fl, list, verify) {
+  if (!isLive(fl)) {
+    if (!(await confirmBox("Go live?", `${fl.name} isn't live. Go live on it and continue?`, "Go live"))) return;
+    await goLive(fl);
+  }
+  try {
+    const job = await api("POST", `/api/floats/${fl.id}/save`, { fixture_ids: list.map(f => f.id), verify });
+    S.engine.job = job; updateLiveBits();
+  } catch (e) { toast(e.message, "bad"); }
+}
+
+async function toMode7(fl, list) {
+  const withUid = list.filter(f => f.uid);
+  const noUid = list.filter(f => !f.uid);
+  const msg = h("div", null,
+    h("p", null, withUid.length
+      ? `Set ${withUid.length} fixture(s) to Mode 7 by RDM and give them new 15-channel addresses (other fixtures on the box keep theirs). Output is held at zero while this runs.`
+      : "None of these fixtures are linked to a scanned fixture, so this only changes the patch here. Set Mode 7 and the new addresses in REAP to match."),
+    noUid.length && withUid.length ? h("div", { class: "note warn" }, "Patch-only change (not linked, set these in REAP): " + noUid.map(f => f.label).join(", ")) : null);
+  if (!(await new Promise(res => modal("Switch to Mode 7", msg, [{ label: "Switch", cls: "gold", fn: () => res(true) }])))) return;
+  const errs = [];
+  await api("POST", "/api/output", { action: "hold", on: true });
+  try {
+    for (const f of withUid) {
+      try { await api("POST", `/api/floats/${fl.id}/rdm`, { box_id: f.box_id, uid: f.uid, action: "mode", mode: 7 }); }
+      catch (e) { errs.push(f.label + ": " + e.message); }
+    }
+    let fresh = await reloadFloat(fl.id);
+    for (const f of fresh.fixtures) if (noUid.some(n => n.id === f.id)) f.mode = 7;
+    if (noUid.length) await saveFloat(fresh, true);
+    const switched = fresh.fixtures.filter(f => list.some(x => x.id === f.id) && f.mode === 7);
+    const boxes = [...new Set(switched.map(f => f.box_id))];
+    for (const b of boxes) await api("POST", `/api/floats/${fl.id}/autopatch`, { box_id: b, start: 1, fixture_ids: switched.filter(f => f.box_id === b).map(f => f.id) });
+    fresh = await reloadFloat(fl.id);
+    for (const f of fresh.fixtures.filter(x => x.uid && switched.some(y => y.id === x.id))) {
+      try { await api("POST", `/api/floats/${fl.id}/rdm`, { box_id: f.box_id, uid: f.uid, action: "address", address: f.address }); }
+      catch (e) { errs.push(f.label + " address: " + e.message); }
+    }
+  } finally {
+    await api("POST", "/api/output", { action: "hold", on: false });
+  }
+  await reloadFloat(fl.id);
+  renderMain();
+  if (errs.length) modal("Some fixtures didn't switch", h("ul", null, errs.map(e => h("li", null, e))));
+  else toast("Mode 7 set and re-addressed", "ok");
+}
+
+// ------------------------------------------------------------------ setup
+async function openSetup() {
+  const net = await api("GET", "/api/network");
+  const body = h("div");
+  const port = net.http_port;
+  const ifs = net.interfaces.filter(i => !i.ip.startsWith("127."));
+  const eth2 = ifs.find(i => i.ip.startsWith("2."));
+  body.append(
+    h("div", { class: "kicker" }, "Open on the iPad"),
+    h("ul", null, ifs.map(i => h("li", null, h("span", { class: "mono" }, `http://${i.ip}:${port}`), h("span", { class: "muted" }, "  " + i.name + (i.ip.startsWith("2.") ? " · box network" : ""))))),
+    h("div", { class: "note " + (eth2 ? "ok" : "warn") }, eth2
+      ? `Mac is on the box network (${eth2.ip} on ${eth2.name}).`
+      : "No 2.x.x.x address on this Mac. For a factory-set E-Box, set the Mac's Ethernet adapter to IP 2.0.0.10, mask 255.0.0.0, no router (System Settings › Network › your USB Ethernet › Details › TCP/IP › Manually)."),
+    net.bind_error ? h("div", { class: "note bad", style: { marginTop: "8px" } }, net.bind_error + " Quit Robe Toolkit, Luminair, xLights or other lighting apps, then restart DMX Scene Builder.") : null,
+    h("hr", { class: "rule" }),
+    h("div", { class: "kicker" }, "Options"),
+    h("div", { class: "btn-row", style: { marginTop: "8px" } },
+      h("button", { class: "btn small " + (S.sim ? "go" : "off"), onclick: async () => { const r = await api("POST", "/api/sim", { on: !S.sim }); S.sim = r.sim; openSetup(); renderMain(); } }, S.sim ? "Simulator: on" : "Simulator: off"),
+      h("button", { class: "btn small " + (S.settings.pause_during_rdm ? "go" : "off"), onclick: async () => { const r = await api("POST", "/api/settings", { pause_during_rdm: !S.settings.pause_during_rdm }); S.settings.pause_during_rdm = r.pause_during_rdm; openSetup(); } },
+        "Pause looks during RDM: " + (S.settings.pause_during_rdm ? "on" : "off"))),
+    S.sim ? h("p", { class: "muted", style: { fontSize: "13px" } }, `Simulator: set a box IP to 127.0.0.1 and use “Find boxes” (it answers on port ${S.sim.port}).`) : null,
+    h("hr", { class: "rule" }),
+    h("div", { class: "kicker" }, "Project"),
+    h("div", { class: "btn-row", style: { marginTop: "8px" } },
+      h("a", { class: "btn small", href: "/api/project", download: "dmx-scene-builder-project.json" }, "Export project"),
+      h("label", { class: "btn small" }, "Import project", h("input", { type: "file", accept: ".json,application/json", class: "hidden", onchange: async (e) => {
+        const file = e.target.files[0]; if (!file) return;
+        try {
+          const data = JSON.parse(await file.text());
+          if (!(await confirmBox("Replace project?", "This replaces every float on this Mac with the file's contents. A backup of the current project is kept.", "Replace", "danger"))) return;
+          await api("PUT", "/api/project", data); await loadState(); renderRail(); renderMain(); toast("Project imported", "ok");
+        } catch (err) { toast("Couldn't import: " + err.message, "bad"); }
+      } })),
+      h("a", { class: "btn small ghost", href: "/guide.html", target: "_blank" }, "Field guide")),
+    h("p", { class: "muted", style: { fontSize: "12px", marginTop: "14px" } }, `DMX Scene Builder ${S.version} · data saved on the Mac in ~/Library/Application Support/DMX Scene Builder (with backups).`));
+  modal("Setup", body);
+}
+
+// ------------------------------------------------------------------ boot
+async function boot() {
+  $("#railToggle").onclick = () => $("#rail").classList.toggle("open");
+  document.addEventListener("pointerdown", () => { S.pointerDown = true; }, true);
+  document.addEventListener("pointerup", () => { S.pointerDown = false; }, true);
+  document.addEventListener("pointercancel", () => { S.pointerDown = false; }, true);
+  $("#setupBtn").onclick = openSetup;
+  $("#releaseBtn").onclick = async () => {
+    const r = await api("POST", "/api/output", { action: S.engine.output ? "release" : "resume" });
+    S.engine = r.engine; renderStatus(); renderRail(); renderFloatHead();
+    if (!S.engine.output && !S.engine.active_float) toast("Pick a float and press Go live");
+  };
+  $("#blackoutBtn").onclick = async () => {
+    const r = await api("POST", "/api/output", { action: "blackout", on: !S.engine.blackout });
+    S.engine = r.engine; renderStatus();
+  };
+  try {
+    await loadState();
+  } catch (e) {
+    $("#mainInner").append(h("div", { class: "card" }, h("h2", null, "Can't reach DMX Scene Builder"), h("p", null, "Is the DMX Scene Builder window still open on the Mac? " + e.message)));
+    return;
+  }
+  renderStatus(); renderRail(); renderMain();
+  setInterval(pollStatus, 1000);
+}
+boot();

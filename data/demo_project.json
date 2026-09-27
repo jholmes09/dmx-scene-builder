@@ -1,0 +1,318 @@
+{
+ "schema": 1,
+ "project": "Demo Parade",
+ "floats": [
+  {
+   "id": "fl_1d208000",
+   "code": "D1",
+   "name": "Demo Float: Snow Globe",
+   "notes": "",
+   "boxes": [
+    {
+     "id": "box_610a7f90",
+     "name": "E-Box A",
+     "ip": "",
+     "udp_port": 6454,
+     "net": 0,
+     "subnet": 0,
+     "universe": 0,
+     "notes": ""
+    }
+   ],
+   "fixtures": [
+    {
+     "id": "fx_b8d4dd49",
+     "label": "TW1-1",
+     "type_id": "TW1",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_610a7f90",
+     "address": null,
+     "uid": null,
+     "notes": "Front light, performers"
+    },
+    {
+     "id": "fx_953556e7",
+     "label": "TW1-2",
+     "type_id": "TW1",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_610a7f90",
+     "address": null,
+     "uid": null,
+     "notes": "Front light, performers"
+    },
+    {
+     "id": "fx_f7c7e8d1",
+     "label": "TW1-3",
+     "type_id": "TW1",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_610a7f90",
+     "address": null,
+     "uid": null,
+     "notes": "Front light, performers"
+    },
+    {
+     "id": "fx_d16baf5a",
+     "label": "TW1-4",
+     "type_id": "TW1",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_610a7f90",
+     "address": null,
+     "uid": null,
+     "notes": "Front light, performers"
+    },
+    {
+     "id": "fx_ed3241b2",
+     "label": "RGB1-1",
+     "type_id": "RGB1",
+     "variant": "RGBW",
+     "mode": 1,
+     "box_id": "box_610a7f90",
+     "address": null,
+     "uid": null,
+     "notes": "Uplight, globe"
+    },
+    {
+     "id": "fx_ee74fcfc",
+     "label": "RGB1-2",
+     "type_id": "RGB1",
+     "variant": "RGBW",
+     "mode": 1,
+     "box_id": "box_610a7f90",
+     "address": null,
+     "uid": null,
+     "notes": "Uplight, globe"
+    }
+   ],
+   "looks": [],
+   "live": {},
+   "run_mode": "standalone"
+  },
+  {
+   "id": "fl_4638f8e7",
+   "code": "D2",
+   "name": "Demo Float: Gingerbread House",
+   "notes": "",
+   "boxes": [
+    {
+     "id": "box_c2c4e8bc",
+     "name": "E-Box A",
+     "ip": "",
+     "udp_port": 6454,
+     "net": 0,
+     "subnet": 0,
+     "universe": 0,
+     "notes": ""
+    }
+   ],
+   "fixtures": [
+    {
+     "id": "fx_0a0b9155",
+     "label": "TW2-1",
+     "type_id": "TW2",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_c2c4e8bc",
+     "address": null,
+     "uid": null,
+     "notes": "Wash, house front"
+    },
+    {
+     "id": "fx_bb60de05",
+     "label": "TW2-2",
+     "type_id": "TW2",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_c2c4e8bc",
+     "address": null,
+     "uid": null,
+     "notes": "Wash, house front"
+    },
+    {
+     "id": "fx_5890d460",
+     "label": "TW2-3",
+     "type_id": "TW2",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_c2c4e8bc",
+     "address": null,
+     "uid": null,
+     "notes": "Wash, house front"
+    },
+    {
+     "id": "fx_dbc28b1c",
+     "label": "TW2-4",
+     "type_id": "TW2",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_c2c4e8bc",
+     "address": null,
+     "uid": null,
+     "notes": "Wash, house front"
+    },
+    {
+     "id": "fx_8bd620ba",
+     "label": "TW2-5",
+     "type_id": "TW2",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_c2c4e8bc",
+     "address": null,
+     "uid": null,
+     "notes": "Wash, house front"
+    },
+    {
+     "id": "fx_1e926423",
+     "label": "TW2-6",
+     "type_id": "TW2",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_c2c4e8bc",
+     "address": null,
+     "uid": null,
+     "notes": "Wash, house front"
+    }
+   ],
+   "looks": [],
+   "live": {},
+   "run_mode": "standalone"
+  },
+  {
+   "id": "fl_ae6e3219",
+   "code": "D3",
+   "name": "Demo Float: Lantern Cart",
+   "notes": "",
+   "boxes": [
+    {
+     "id": "box_3e97cbec",
+     "name": "E-Box A",
+     "ip": "",
+     "udp_port": 6454,
+     "net": 0,
+     "subnet": 0,
+     "universe": 0,
+     "notes": ""
+    }
+   ],
+   "fixtures": [
+    {
+     "id": "fx_1cd7fe75",
+     "label": "RGB2-1",
+     "type_id": "RGB2",
+     "variant": "RGBW",
+     "mode": 1,
+     "box_id": "box_3e97cbec",
+     "address": null,
+     "uid": null,
+     "notes": "Underside glow"
+    },
+    {
+     "id": "fx_b2e0dd27",
+     "label": "RGB2-2",
+     "type_id": "RGB2",
+     "variant": "RGBW",
+     "mode": 1,
+     "box_id": "box_3e97cbec",
+     "address": null,
+     "uid": null,
+     "notes": "Underside glow"
+    },
+    {
+     "id": "fx_66619a00",
+     "label": "RGB2-3",
+     "type_id": "RGB2",
+     "variant": "RGBW",
+     "mode": 1,
+     "box_id": "box_3e97cbec",
+     "address": null,
+     "uid": null,
+     "notes": "Underside glow"
+    },
+    {
+     "id": "fx_cafc30bc",
+     "label": "RGB2-4",
+     "type_id": "RGB2",
+     "variant": "RGBW",
+     "mode": 1,
+     "box_id": "box_3e97cbec",
+     "address": null,
+     "uid": null,
+     "notes": "Underside glow"
+    },
+    {
+     "id": "fx_b9833fa3",
+     "label": "RGB2-5",
+     "type_id": "RGB2",
+     "variant": "RGBW",
+     "mode": 1,
+     "box_id": "box_3e97cbec",
+     "address": null,
+     "uid": null,
+     "notes": "Underside glow"
+    }
+   ],
+   "looks": [],
+   "live": {},
+   "run_mode": "standalone"
+  },
+  {
+   "id": "fl_1f10b418",
+   "code": "D4",
+   "name": "Demo Float: Music Box (live DMX)",
+   "notes": "",
+   "boxes": [
+    {
+     "id": "box_16510424",
+     "name": "E-Box A",
+     "ip": "",
+     "udp_port": 6454,
+     "net": 0,
+     "subnet": 0,
+     "universe": 0,
+     "notes": ""
+    }
+   ],
+   "fixtures": [
+    {
+     "id": "fx_070b1a4f",
+     "label": "TW3-1",
+     "type_id": "TW3",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_16510424",
+     "address": null,
+     "uid": null,
+     "notes": "Key light, dancer"
+    },
+    {
+     "id": "fx_a008a3d7",
+     "label": "TW3-2",
+     "type_id": "TW3",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_16510424",
+     "address": null,
+     "uid": null,
+     "notes": "Key light, dancer"
+    },
+    {
+     "id": "fx_a2ebaa9b",
+     "label": "TW3-3",
+     "type_id": "TW3",
+     "variant": "TW",
+     "mode": 11,
+     "box_id": "box_16510424",
+     "address": null,
+     "uid": null,
+     "notes": "Key light, dancer"
+    }
+   ],
+   "looks": [],
+   "live": {},
+   "run_mode": "live_dmx"
+  }
+ ]
+}
