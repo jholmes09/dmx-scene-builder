@@ -435,18 +435,17 @@ class Handler(BaseHTTPRequestHandler):
                 eng.refresh()
                 return self._json(res)
             if rest == ["save_rdm"] and method == "POST":
-                return self._json(self._save_rdm(fl, self._body().get("fixture_ids", [])))
+                return self._json(self._save_rdm(fl, self._body().get("box_ids")))
             if rest == ["save"] and method == "POST":
                 b = self._body()
                 return self._json(eng.start_save(fid, b.get("fixture_ids", []), bool(b.get("verify"))))
         raise KeyError("no such endpoint")
 
-    def _save_rdm(self, fl, fixture_ids):
-        """Tell each fixture, over RDM, to keep what it is showing now as its power-on look
-        (Anolis manufacturer parameter "Init position LEDs" = 1, found by its description)."""
+    def _save_rdm(self, fl, box_ids=None):
+        """Tell every fixture on the float's boxes, over RDM, to keep what it is showing now as its
+        power-on look (Anolis manufacturer parameter "Init position LEDs" = 1, found by its name).
+        No prior Scan or linking needed: each box's device list is read fresh."""
         app = self.app
-        results = []
-        chosen = [fx for fx in fl["fixtures"] if fx["id"] in set(fixture_ids)]
         eng = app.engine
         with eng.lock:
             if eng.hold:
@@ -454,35 +453,43 @@ class Handler(BaseHTTPRequestHandler):
             if eng.job and eng.job.get("state") == "running":
                 raise RuntimeError("A save is running. Wait for it to finish.")
             if eng.active_float != fl["id"] or not eng.ctl.output_enabled:
-                raise RuntimeError("Go live on this float first, so the fixtures are showing the look.")
+                raise RuntimeError("Go live on this float first.")
             # Never save a dark look.
             eng.blackout = False
             eng.sweep = None
             eng.flash.clear()
         eng.refresh()
         time.sleep(0.6)
-        # The fixtures must be receiving the look right now, so output stays on (no RDM pause).
+        boxes = [b for b in fl["boxes"] if b.get("ip") and (not box_ids or b["id"] in box_ids)]
+        if not boxes:
+            raise RuntimeError("Set the box IP first (Patch tab).")
+        labels = {fx.get("uid"): fx["label"] for fx in fl["fixtures"] if fx.get("uid")}
+        results = []
+        # Output stays on (no RDM pause): the fixtures must be showing the look while they save it.
         with app.scan_lock:
-            for fx in chosen:
-                r = {"id": fx["id"], "label": fx["label"]}
-                if not fx.get("uid"):
-                    r.update(ok=False, why="not linked to a scanned fixture")
-                    results.append(r)
-                    continue
+            for b in boxes:
+                ip, port, pa = app.box_target(fl, b["id"])
                 try:
-                    ip, port, pa = app.box_target(fl, fx["box_id"])
-                    uid = rdm.uid_from_str(fx["uid"])
-                    params = app.mfr_params(ip, port, pa, uid, with_values=False)
-                    d = app.find_save_param(params)
-                    if not d:
-                        r.update(ok=False, why="fixture has no 'Init position' setting (it lists: %s)" % (
-                            ", ".join(p["description"] for p in params) or "none"))
-                    else:
-                        app.ctl.set_param(ip, port, pa, uid, d["pid"], 1, d["size"] if d["size"] in (1, 2, 4) else 1)
-                        r.update(ok=True, param=d["description"], pid="0x%04X" % d["pid"])
-                except (RdmError, ValueError, KeyError) as e:
-                    r.update(ok=False, why=str(e))
-                results.append(r)
+                    uids = self.app.ctl.tod(ip, port, pa)
+                except RdmError as e:
+                    results.append({"box": b["name"], "label": b["name"], "ok": False, "why": str(e)})
+                    continue
+                if not uids:
+                    results.append({"box": b["name"], "label": b["name"], "ok": False, "why": "no fixtures reported"})
+                for uid in uids:
+                    us = rdm.uid_str(uid)
+                    r = {"box": b["name"], "uid": us, "label": labels.get(us, us)}
+                    try:
+                        params = app.mfr_params(ip, port, pa, uid, with_values=False)
+                        d = app.find_save_param(params)
+                        if not d:
+                            r.update(ok=False, why="no 'Init position' setting")
+                        else:
+                            app.ctl.set_param(ip, port, pa, uid, d["pid"], 1, d["size"] if d["size"] in (1, 2, 4) else 1)
+                            r.update(ok=True, param=d["description"])
+                    except (RdmError, ValueError) as e:
+                        r.update(ok=False, why=str(e))
+                    results.append(r)
         return {"results": results, "saved": sum(1 for r in results if r.get("ok"))}
 
     def _palette(self, method, rest):

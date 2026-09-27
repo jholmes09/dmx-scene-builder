@@ -70,7 +70,7 @@ app under Setup.
 - Saved colors: save a color (and optionally brightness) from the Look tab,
   then apply it to any selected lights on any float.
 - Multi-select lights in the Look tab, so several lights can be set together.
-- A "Parade setup" tab for floats that run on live DMX from show control
+- A "Parade" tab for floats that run on live DMX from show control
   instead of stand-alone.
 - A per-fixture Settings button in Scan results, for the maker's own
   settings (like Terminator active).

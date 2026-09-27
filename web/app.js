@@ -250,32 +250,15 @@ function updateLiveBits() {
 
 // ------------------------------------------------------------------ rail (float list)
 function renderRail() {
-  const rail = $("#rail");
-  rail.innerHTML = "";
-  rail.append(h("div", { class: "kicker", style: { padding: "4px 10px 10px" } }, S.project ? S.project.project : ""));
+  const pick = $("#floatPick");
+  if (!pick || !S.project) return;
+  pick.innerHTML = "";
   for (const fl of S.project.floats) {
-    const probs = (fl.problems || []);
-    const errs = probs.filter(p => p.level === "error").length;
-    const warns = probs.length - errs;
-    const tw = fl.fixtures.filter(x => x.variant === "TW").length;
-    const rgb = fl.fixtures.filter(x => x.variant === "RGBW").length;
-    rail.append(h("button", {
-      class: "float-item" + (fl.id === S.floatId ? " active" : ""),
-      onclick: () => { selectFloat(fl.id); rail.classList.remove("open"); },
-    },
-      h("div", { class: "code" }, fl.code || " "),
-      h("div", { class: "name" }, fl.name),
-      h("div", { class: "meta" },
-        h("span", null, fl.fixtures.length + " lights"),
-        tw ? h("span", null, tw + " TW") : null,
-        rgb ? h("span", null, rgb + " RGB") : null,
-        errs ? h("span", { class: "badge bad", title: "patch errors" }, errs) : null,
-        warns ? h("span", { class: "badge warn", title: "unaddressed" }, warns) : null,
-        fl.run_mode === "live_dmx" ? h("span", { class: "badge warn", title: "Runs on live DMX input in the parade" }, "DMX in") : null,
-        isLive(fl) ? h("span", { class: "live-tag" }, "● Live") : null)));
+    const live = isLive(fl) ? "● " : "";
+    pick.append(h("option", { value: fl.id, selected: fl.id === S.floatId }, live + (fl.code ? fl.code + "  " : "") + fl.name));
   }
-  rail.append(h("div", { style: { padding: "10px" } },
-    h("button", { class: "btn small ghost", style: { width: "100%" }, onclick: addFloat }, "+ Add float")));
+  if (!S.project.floats.length) pick.append(h("option", { value: "" }, "No floats"));
+  pick.onchange = () => selectFloat(pick.value);
 }
 
 async function addFloat() {
@@ -301,14 +284,12 @@ function renderMain() {
   const fl = curFloat();
   if (!fl) {
     root.append(h("div", { class: "empty" }, h("img", { src: "img/logo.png", alt: "" }),
-      h("h2", { style: { marginTop: "20px" } }, "No floats yet"),
-      h("p", { class: "muted" }, "Add a float, or load the fixture schedule from Setup."),
-      h("button", { class: "btn gold", onclick: addFloat }, "Add float")));
+      h("div", { style: { marginTop: "20px" } }, h("button", { class: "btn gold", onclick: addFloat }, "Add a float"))));
     return;
   }
   root.append(h("div", { id: "floatHead" }));
   renderFloatHead();
-  const tabs = [["look", "Look"], ["patch", "Patch & addressing"], ["save", fl.run_mode === "live_dmx" ? "Parade setup" : "Save to fixtures"]];
+  const tabs = [["look", "Look"], ["patch", "Patch"], ["save", fl.run_mode === "live_dmx" ? "Parade" : "Save"]];
   root.append(h("div", { class: "tabs" }, tabs.map(([k, label]) =>
     h("button", { class: "tab" + (S.tab === k ? " active" : ""), onclick: () => { S.tab = k; localStorage.setItem("fl.tab", k); renderMain(); } }, label))));
   const body = h("div", { id: "tabBody" });
@@ -324,22 +305,18 @@ function renderFloatHead() {
   if (!el || !fl) return;
   el.innerHTML = "";
   const live = isLive(fl);
-  const other = S.engine.output && S.engine.active_float && S.engine.active_float !== fl.id
-    ? S.project.floats.find(f => f.id === S.engine.active_float) : null;
+  const noIp = fl.boxes.some(b => !b.ip);
+  const errs = (fl.problems || []).some(p => p.level === "error");
   el.append(h("div", { class: "float-head" },
     h("div", { class: "grow" },
-      h("div", { class: "kicker" }, (fl.code ? fl.code + " · " : "") + fl.fixtures.length + " fixtures · " + fl.boxes.length + (fl.boxes.length === 1 ? " box" : " boxes")),
-      h("h1", null, fl.name)),
+      h("h1", null, fl.name),
+      h("div", { class: "btn-row", style: { marginTop: "6px" } },
+        fl.run_mode === "live_dmx" ? h("span", { class: "chip-warn", style: { cursor: "default" } }, "Live DMX float") : null,
+        noIp ? h("button", { class: "chip-warn", onclick: () => { S.tab = "patch"; renderMain(); } }, "Set box IP") : null,
+        errs ? h("button", { class: "chip-warn", onclick: () => { S.tab = "patch"; renderMain(); } }, "Address overlap") : null)),
     live
-      ? h("div", { class: "btn-row" }, h("span", { class: "status-pill live" }, h("span", { class: "dot" }), "Live on this float"))
-      : h("button", { class: "btn gold", onclick: () => goLive(fl) }, other ? "Switch live to this float" : "Go live on this float")));
-  if (fl.notes) el.append(h("div", { class: "note warn", style: { marginBottom: "10px" } }, fl.notes));
-  if (!live) el.append(h("div", { class: "note", style: { marginBottom: "10px" } },
-    other ? `Live output is on ${other.name}. Changes here are saved but not sent until you switch.`
-          : "Not live. Changes are saved but not sent to the lights until you go live."));
-  const noIp = fl.boxes.filter(b => !b.ip);
-  if (noIp.length) el.append(h("div", { class: "note warn", style: { marginBottom: "10px" } },
-    `${noIp.map(b => b.name).join(", ")} has no IP address yet. Set it on the Patch tab.`));
+      ? h("span", { class: "status-pill live" }, h("span", { class: "dot" }), "Live")
+      : h("button", { class: "btn gold", onclick: () => goLive(fl) }, "Go live")));
 }
 
 async function goLive(fl) {
@@ -372,7 +349,6 @@ function renderLook(body, fl) {
   ];
   const types = [...new Set(fl.fixtures.map(f => f.type_id).filter(Boolean))].sort();
   const bar = h("div", { class: "select-bar" },
-    h("span", { class: "kicker small", style: { marginRight: "4px" } }, "Select"),
     quick.map(([label, fn]) => h("button", { class: "chip", onclick: () => { S.sel = new Set(fn()); refreshLook(); } }, label)),
     types.length > 1 ? types.map(t => h("button", { class: "chip", onclick: () => { S.sel = new Set(fl.fixtures.filter(f => f.type_id === t).map(f => f.id)); refreshLook(); } }, t)) : null,
     h("button", { class: "chip", onclick: () => { S.sel.clear(); refreshLook(); } }, "None"));
@@ -399,7 +375,7 @@ function renderLook(body, fl) {
       h("div", { class: "swatch", style: { background: previewCss(fx, st) } }),
       h("div", { class: "lbl", title: fx.notes || "" }, fx.label || "Fixture"),
       h("div", { class: "sub" }, h("span", { class: "type" }, fx.variant === "RGBW" ? "RGB+W" : fx.variant), h("span", null, Math.round(st.dim * 100) + "%")),
-      h("div", { class: "sub" }, h("span", null, (fx.notes || "").split(" | ")[0].slice(0, 22)), h("span", null, addrTxt)));
+      null);
   }
   function refreshTiles() {
     grid.innerHTML = "";
@@ -414,15 +390,13 @@ function renderLook(body, fl) {
     const card = h("div", { class: "card" });
     right.append(card);
     if (!chosen.length) {
-      card.append(h("div", { class: "sel-summary" }, "Tap lights to select them"),
-        h("p", { class: "muted" }, "Tap as many as you like; every selected light changes together. Or tap a group above (All, Tunable white, RGB + White, or a fixture type) to grab them all at once. Tap a light again to drop it."));
+      card.append(h("div", { class: "sel-summary" }, "Tap lights to select"));
       card.append(paletteSection(fl, [], null, renderPanel));
       return;
     }
     const variants = new Set(chosen.map(effVariant));
     const states = chosen.map(f => stateOf(fl, f));
-    card.append(h("div", { class: "sel-summary" }, chosen.length === 1 ? chosen[0].label : chosen.length + " lights selected, changing together"),
-      h("div", { class: "kicker small" }, [...new Set(chosen.map(f => f.variant === "RGBW" ? "RGB + White" : f.variant === "TW" ? "Tunable white" : "White"))].join(" + ")));
+    card.append(h("div", { class: "sel-summary" }, chosen.length === 1 ? chosen[0].label : chosen.length + " selected"));
 
     const apply = (partial) => {
       const changes = {};
@@ -439,14 +413,14 @@ function renderLook(body, fl) {
       onInput: v => apply({ dim: v / 100 }),
     }));
     card.append(h("div", { class: "presets" },
-      [0, 10, 25, 50, 75, 100].map(p => h("button", { onclick: () => { apply({ dim: p / 100 }); renderPanel(); } }, p === 0 ? "Off" : p + "%"))));
+      [0, 25, 50, 75, 100].map(p => h("button", { onclick: () => { apply({ dim: p / 100 }); renderPanel(); } }, p === 0 ? "Off" : p + "%"))));
 
     const hasRGB = variants.has("RGBW");
     const rgbStates = chosen.filter(f => effVariant(f) === "RGBW").map(f => stateOf(fl, f));
     const kind = rgbStates.length ? (rgbStates.every(s => s.kind === "color") ? "color" : rgbStates.every(s => s.kind === "white") ? "white" : "mixed") : "white";
 
     if (hasRGB) {
-      card.append(h("div", { class: "ctl" }, h("div", { class: "ctl-label" }, h("span", { class: "kicker small" }, "RGB fixtures show")),
+      card.append(h("div", { class: "ctl" }, h("div", { class: "ctl-label" }, h("span", { class: "kicker small" }, "RGB")),
         h("div", { class: "seg" },
           h("button", { class: kind === "white" ? "on" : "", onclick: () => { apply((f) => effVariant(f) === "RGBW" ? { kind: "white" } : {}); renderPanel(); } }, "White"),
           h("button", { class: kind === "color" ? "on" : "", onclick: () => { apply((f) => effVariant(f) === "RGBW" ? { kind: "color" } : {}); renderPanel(); } }, "Color"))));
@@ -460,14 +434,13 @@ function renderLook(body, fl) {
       const ccts = states.map(s => Math.round(s.cct));
       const noCtc = chosen.filter(f => effVariant(f) === "RGBW" && !MODES_ROLES(f).includes("ctc"));
       card.append(sliderCtl({
-        label: "Color temperature", min: lo, max: hi, step: 50, value: clamp(ccts[0], lo, hi), mixed: new Set(ccts).size > 1,
+        label: "White", min: lo, max: hi, step: 50, value: clamp(ccts[0], lo, hi), mixed: new Set(ccts).size > 1,
         fmt: v => v + "K", track: `linear-gradient(90deg, ${[lo, 3000, 4000, 5000, hi].map(k => "rgb(" + kelvinToRgb(k).map(c => Math.round(c * 255)).join(",") + ")").join(",")})`,
         onInput: v => apply({ cct: v }),
       }));
       card.append(h("div", { class: "presets" },
-        [2700, 3000, 3200, 4000, 5000, 5600, 6500].filter(k => k >= lo).map(k => h("button", { onclick: () => { apply({ cct: k }); renderPanel(); } }, k + "K"))));
-      if (noCtc.length) card.append(h("div", { class: "note warn", style: { marginTop: "10px", fontSize: "13px" } },
-        `${noCtc.length} RGB fixture(s) are in a mode without color-temperature control, so they show their built-in white only. Use Mode 3, 4, 6 or 7 to tune their white.`));
+        [2700, 3000, 4000, 5600, 6500].filter(k => k >= lo).map(k => h("button", { onclick: () => { apply({ cct: k }); renderPanel(); } }, k + "K"))));
+      if (noCtc.length) card.append(h("p", { class: "hint" }, `${noCtc.length} RGB fixture(s) can't tune white in their mode.`));
     }
 
     // color (RGB in color)
@@ -493,9 +466,8 @@ function renderLook(body, fl) {
 
     card.append(h("hr", { class: "rule" }),
       h("div", { class: "btn-row" },
-        h("button", { class: "btn small", onclick: () => flashFixtures(fl, chosen) }, "Flash to find"),
-        chosen.length === 1 ? h("span", { class: "muted", style: { fontSize: "13px" } }, chosen[0].address ? `${chosen[0].variant} Mode ${chosen[0].mode} · ch ${chosen[0].address}–${chosen[0].address + footprint(chosen[0]) - 1}` : "No address yet") : null));
-    if (chosen.length === 1 && chosen[0].notes) card.append(h("p", { class: "muted", style: { fontSize: "13px", marginBottom: 0 } }, chosen[0].notes));
+        h("button", { class: "btn small", onclick: () => flashFixtures(fl, chosen) }, "Flash"),
+        chosen.length === 1 && chosen[0].address ? h("span", { class: "hint", style: { margin: 0 } }, `ch ${chosen[0].address}`) : null));
   }
 
   refreshTiles();
@@ -535,8 +507,8 @@ function paletteSection(fl, chosen, apply, rerender) {
     chosen.length ? h("button", { class: "btn tiny", onclick: () => saveColor(chosen, fl, rerender) }, "+ Save this color") : null));
   if (!pal.length) {
     wrap.append(h("div", { class: "muted", style: { fontSize: "13px" } }, chosen.length
-      ? "Save the selected light's color to reuse it on any light, on any float."
-      : "Colors you save show up here, on every float."));
+      ? "None saved yet."
+      : "None saved yet."));
     return wrap;
   }
   wrap.append(h("div", { class: "presets" }, pal.map(c => h("div", { class: "look-chip" },
@@ -552,7 +524,6 @@ function paletteSection(fl, chosen, apply, rerender) {
     }, h("span", { style: { display: "inline-block", width: "18px", height: "18px", borderRadius: "5px", marginRight: "8px", verticalAlign: "-3px", background: paletteCss(c.state), border: "1px solid rgba(255,255,255,.2)" } }),
       c.name + (c.include_dim ? " · " + Math.round((c.state.dim || 0) * 100) + "%" : "")),
     h("button", { class: "more", title: "Rename or delete", onclick: () => colorMenu(c, rerender) }, "⋯")))));
-  if (!chosen.length) wrap.append(h("div", { class: "muted", style: { fontSize: "12px", marginTop: "6px" } }, "Select lights, then tap a saved color to apply it."));
   return wrap;
 }
 
@@ -634,20 +605,19 @@ async function flashFixtures(fl, list) {
 
 function looksCard(fl) {
   const card = h("div", { class: "card" });
-  card.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Saved looks"),
+  card.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Looks"),
     h("button", { class: "btn gold small", onclick: async () => {
-      const name = await ask("Save this look", "Name", "Look " + (fl.looks.length + 1));
+      const name = await ask("Save look", "Name", "Look " + (fl.looks.length + 1));
       if (!name) return;
       const look = await api("POST", `/api/floats/${fl.id}/looks`, { name });
-      fl.looks.push(look); renderMain(); toast("Saved “" + name + "”", "ok");
-    } }, "Save current look")));
-  if (!fl.looks.length) card.append(h("p", { class: "muted", style: { margin: 0 } }, "Nothing saved yet. Looks are stored on the Mac, per float. The live look is kept automatically too."));
+      fl.looks.push(look); renderMain(); toast("Saved", "ok");
+    } }, "Save look")));
   card.append(h("div", { class: "looks-bar" }, fl.looks.map(l => h("div", { class: "look-chip" },
     h("button", { onclick: async () => {
       await api("POST", `/api/floats/${fl.id}/looks/${l.id}/recall`);
-      fl.live = JSON.parse(JSON.stringify(l.states)); renderMain(); toast("Recalled “" + l.name + "”");
+      fl.live = JSON.parse(JSON.stringify(l.states)); renderMain();
     } }, l.name),
-    h("button", { class: "more", title: "More", onclick: () => lookMenu(fl, l) }, "⋯")))));
+    h("button", { class: "more", onclick: () => lookMenu(fl, l) }, "⋯")))));
   return card;
 }
 
@@ -663,79 +633,74 @@ function lookMenu(fl, l) {
 function problemsBox(fl) {
   const probs = (fl && fl.problems) || [];
   const box = h("div", { id: "patchProblems" });
-  if (!probs.length) { box.append(h("div", { class: "note ok" }, "Patch looks clean: every fixture has an address and nothing overlaps.")); return box; }
   const errs = probs.filter(p => p.level === "error"), warns = probs.filter(p => p.level !== "error");
-  if (errs.length) box.append(h("div", { class: "note bad" }, h("strong", null, "Overlaps: "), [...new Set(errs.map(p => p.text))].slice(0, 6).join(" · ")));
-  if (warns.length) box.append(h("div", { class: "note warn", style: { marginTop: "8px" } }, warns.length + " fixture(s) have no DMX address yet."));
+  if (errs.length) box.append(h("div", { class: "note bad", style: { marginBottom: "8px" } }, [...new Set(errs.map(p => p.text))].slice(0, 4).join(" · ")));
+  if (warns.length) box.append(h("div", { class: "note warn", style: { marginBottom: "8px" } }, warns.length + " without an address"));
   return box;
 }
 
-function renderPatch(body, fl) {
-  // Float details
-  body.append(h("div", { class: "card" },
-    h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Float details"),
-      h("a", { class: "btn small", href: "/patch/" + fl.id, target: "_blank" }, "Print patch sheet"),
+function floatSettings(fl) {
+  return h("div", null,
+    h("div", { class: "form-row" },
+      h("div", { class: "field", style: { width: "100px" } }, h("label", null, "Code"), h("input", { class: "f", value: fl.code || "", onchange: e => { fl.code = e.target.value; saveFloat(fl); renderRail(); } })),
+      h("div", { class: "field", style: { flex: 1, minWidth: "200px" } }, h("label", null, "Name"), h("input", { class: "f", value: fl.name, onchange: e => { fl.name = e.target.value; saveFloat(fl); renderRail(); renderFloatHead(); } })),
+      h("div", { class: "field", style: { minWidth: "220px" } }, h("label", null, "In the parade"),
+        h("select", { class: "f", onchange: e => { fl.run_mode = e.target.value; saveFloat(fl, true).then(() => { renderRail(); renderMain(); }); } },
+          h("option", { value: "standalone", selected: fl.run_mode !== "live_dmx" }, "Runs on its own"),
+          h("option", { value: "live_dmx", selected: fl.run_mode === "live_dmx" }, "Live DMX input")))),
+    h("div", { class: "btn-row", style: { marginTop: "12px" } },
+      h("a", { class: "btn small", href: "/patch/" + fl.id, target: "_blank" }, "Patch sheet"),
+      h("button", { class: "btn small ghost", onclick: () => { fl.boxes.push({ id: "box_" + uid8(), name: "E-Box " + "ABCDEFGH"[fl.boxes.length], ip: "", udp_port: 6454, net: 0, subnet: 0, universe: 0, notes: "" }); saveFloat(fl, true).then(() => renderMain()); } }, "+ Box"),
       h("button", { class: "btn small danger", onclick: async () => {
-        if (!(await confirmBox("Delete float?", `Delete ${fl.name} and its saved looks? This can't be undone (backups are kept on the Mac).`, "Delete", "danger"))) return;
+        if (!(await confirmBox("Delete float?", `Delete ${fl.name} and its looks?`, "Delete", "danger"))) return;
         await api("DELETE", "/api/floats/" + fl.id);
         S.project.floats = S.project.floats.filter(f => f.id !== fl.id);
         S.floatId = S.project.floats[0] ? S.project.floats[0].id : null; renderRail(); renderMain();
-      } }, "Delete float")),
-    h("div", { class: "form-row" },
-      h("div", { class: "field", style: { width: "110px" } }, h("label", null, "Code"), h("input", { class: "f", value: fl.code || "", onchange: e => { fl.code = e.target.value; saveFloat(fl); renderRail(); renderFloatHead(); } })),
-      h("div", { class: "field", style: { flex: 1, minWidth: "220px" } }, h("label", null, "Name"), h("input", { class: "f", value: fl.name, onchange: e => { fl.name = e.target.value; saveFloat(fl); renderRail(); renderFloatHead(); } })),
-      h("div", { class: "field", style: { flex: 2, minWidth: "220px" } }, h("label", null, "Notes"), h("input", { class: "f", value: fl.notes || "", onchange: e => { fl.notes = e.target.value; saveFloat(fl); } })),
-      h("div", { class: "field", style: { minWidth: "260px" } }, h("label", null, "In the parade this float runs"),
-        h("select", { class: "f", onchange: e => { fl.run_mode = e.target.value; saveFloat(fl, true).then(() => { renderRail(); renderMain(); }); } },
-          h("option", { value: "standalone", selected: fl.run_mode !== "live_dmx" }, "On its own (look saved in the fixtures)"),
-          h("option", { value: "live_dmx", selected: fl.run_mode === "live_dmx" }, "On live DMX input (show control)"))))));
+      } }, "Delete float")));
+}
 
-  // Boxes
+function renderPatch(body, fl) {
   const boxes = h("div", { class: "card" });
-  boxes.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "E-Boxes"),
-    h("button", { class: "btn small", onclick: () => discover(fl) }, "Find boxes on network"),
-    h("button", { class: "btn small ghost", onclick: () => { fl.boxes.push({ id: "box_" + uid8(), name: "E-Box " + "ABCDEFGH"[fl.boxes.length], ip: "", udp_port: 6454, net: 0, subnet: 0, universe: 0, notes: "" }); saveFloat(fl, true).then(() => renderMain()); } }, "+ Box")));
+  boxes.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, fl.boxes.length > 1 ? "Boxes" : "Box"),
+    h("button", { class: "btn small", onclick: () => discover(fl) }, "Find")));
   if (S.discover) boxes.append(discoverResults(fl));
   for (const b of fl.boxes) boxes.append(boxRow(fl, b));
   body.append(boxes);
 
-  // Fixtures
+  for (const b of fl.boxes) if (S.scan[b.id]) body.append(scanCard(fl, b, S.scan[b.id]));
+
   const fxCard = h("div", { class: "card" });
   fxCard.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Fixtures"),
     h("button", { class: "btn small", onclick: () => autoPatch(fl) }, "Auto-address"),
-    h("button", { class: "btn small ghost", onclick: () => { fl.fixtures.push({ id: "fx_" + uid8(), label: "New " + (fl.fixtures.length + 1), type_id: "", variant: "TW", mode: 11, box_id: fl.boxes[0] && fl.boxes[0].id, address: null, uid: null, notes: "" }); saveFloat(fl, true).then(() => renderMain()); } }, "+ Fixture")));
+    h("button", { class: "btn small ghost icon", title: "Add fixture", onclick: () => { fl.fixtures.push({ id: "fx_" + uid8(), label: "New " + (fl.fixtures.length + 1), type_id: "", variant: "TW", mode: 11, box_id: fl.boxes[0] && fl.boxes[0].id, address: null, uid: null, notes: "" }); saveFloat(fl, true).then(() => renderMain()); } }, "+")));
   fxCard.append(problemsBox(fl));
-  fxCard.append(h("div", { class: "tbl-wrap", style: { marginTop: "10px" } }, fixtureTable(fl)));
+  fxCard.append(h("div", { class: "tbl-wrap" }, fixtureTable(fl)));
   body.append(fxCard);
 
-  // Scan results
-  for (const b of fl.boxes) if (S.scan[b.id]) body.append(scanCard(fl, b, S.scan[b.id]));
-
-  // Address finder
-  body.append(sweepCard(fl));
+  const more = h("div", { class: "card" });
+  more.append(h("details", { class: "more", style: { borderTop: 0, marginTop: 0, paddingTop: 0 } }, h("summary", null, "Address finder"), sweepCard(fl)));
+  more.append(h("details", { class: "more" }, h("summary", null, "Float settings"), floatSettings(fl)));
+  body.append(more);
   if (S.sim) body.append(simBox());
 }
 
 function boxRow(fl, b) {
-  const num = (k, lo, hi) => h("input", { class: "f num", type: "number", inputmode: "numeric", min: lo, max: hi, value: b[k],
+  const num = (k, lo, hi) => h("input", { class: "f num", type: "number", inputmode: "numeric", min: lo, max: hi, value: b[k], style: { width: "58px" },
     onchange: e => { b[k] = clamp(parseInt(e.target.value || "0", 10), lo, hi); e.target.value = b[k]; saveFloat(fl); } });
   const scanning = S._scanning === b.id;
   return h("div", { style: { borderTop: "1px solid var(--line)", paddingTop: "12px", marginTop: "12px" } },
     h("div", { class: "form-row" },
-      h("div", { class: "field", style: { width: "140px" } }, h("label", null, "Name"), h("input", { class: "f", value: b.name, onchange: e => { b.name = e.target.value; saveFloat(fl); } })),
-      h("div", { class: "field" }, h("label", null, "IP address"), h("input", { class: "f ip", value: b.ip, placeholder: "2.x.x.x", inputmode: "decimal", onchange: e => { b.ip = e.target.value.trim(); saveFloat(fl); renderFloatHead(); } })),
-      h("div", { class: "field" }, h("label", null, "Net"), num("net", 0, 127)),
-      h("div", { class: "field" }, h("label", null, "Sub-Net"), num("subnet", 0, 15)),
-      h("div", { class: "field" }, h("label", null, "Universe"), num("universe", 0, 15)),
+      fl.boxes.length > 1 ? h("div", { class: "field", style: { width: "110px" } }, h("label", null, "Name"), h("input", { class: "f", value: b.name, onchange: e => { b.name = e.target.value; saveFloat(fl); } })) : null,
+      h("div", { class: "field" }, h("label", null, "IP"), h("input", { class: "f ip", value: b.ip, placeholder: "2.x.x.x", inputmode: "decimal", onchange: e => { b.ip = e.target.value.trim(); saveFloat(fl); renderFloatHead(); } })),
+      h("div", { class: "field" }, h("label", null, "Net · Sub · Uni"), h("div", { class: "btn-row", style: { flexWrap: "nowrap", gap: "4px" } }, num("net", 0, 127), num("subnet", 0, 15), num("universe", 0, 15))),
       h("div", { class: "btn-row", style: { marginLeft: "auto" } },
-        h("button", { class: "btn small gold", disabled: !b.ip || scanning, onclick: () => scanBox(fl, b) }, scanning ? "Scanning…" : "Scan fixtures (RDM)"),
-        b.ip ? h("a", { class: "btn small", href: "http://" + b.ip, target: "_blank", title: "The box's own web page. Login robe / 2479" }, "Open REAP") : null,
-        fl.boxes.length > 1 ? h("button", { class: "btn small ghost", onclick: async () => {
-          if (!(await confirmBox("Remove box?", `Remove ${b.name}? Its fixtures move to the first remaining box.`, "Remove", "danger"))) return;
+        h("button", { class: "btn small gold", disabled: !b.ip || scanning, onclick: () => scanBox(fl, b) }, scanning ? "Scanning…" : "Scan"),
+        b.ip ? h("a", { class: "btn small", href: "http://" + b.ip, target: "_blank", title: "Box web page (robe / 2479)" }, "REAP") : null,
+        S.sim && b.ip !== "127.0.0.1" ? h("button", { class: "btn small ghost", onclick: () => { b.ip = "127.0.0.1"; b.udp_port = S.sim.port; b.net = S.sim.net; b.subnet = S.sim.subnet; b.universe = S.sim.universe; saveFloat(fl, true).then(() => renderMain()); } }, "Use simulator") : null,
+        fl.boxes.length > 1 ? h("button", { class: "btn small ghost icon", title: "Remove box", onclick: async () => {
+          if (!(await confirmBox("Remove box?", `Remove ${b.name}?`, "Remove", "danger"))) return;
           fl.boxes = fl.boxes.filter(x => x.id !== b.id); await saveFloat(fl, true); renderMain();
-        } }, "Remove") : null)),
-    h("div", { class: "muted", style: { fontSize: "12px", marginTop: "6px" } },
-      "Match the box menu: Personality › Ethernet Settings › ArtNet Settings (Net / Sub-Net / Universe). REAP login is robe / 2479."));
+        } }, "✕") : null)));
 }
 
 async function discover(fl) {
@@ -775,30 +740,25 @@ function discoverResults(fl) {
 
 function fixtureTable(fl) {
   const t = h("table", { class: "tbl" });
-  t.append(h("tr", null, ["", "Fixture", "Type", "Mode", fl.boxes.length > 1 ? "Box" : null, "Address", "Channels", "RDM UID", ""].filter(x => x !== null).map(x => h("th", null, x))));
+  t.append(h("tr", null, ["", "Fixture", "Type", "Mode", fl.boxes.length > 1 ? "Box" : null, "Address", ""].filter(x => x !== null).map(x => h("th", null, x))));
   const errIds = new Set((fl.problems || []).filter(p => p.level === "error").map(p => p.fixture));
-  fl.fixtures.forEach((fx, idx) => {
+  fl.fixtures.forEach((fx) => {
     const st = stateOf(fl, fx);
-    const modeOpts = Object.values(MODES[fx.variant] || {}).map(m => h("option", { value: m.mode, selected: m.mode === fx.mode }, m.name));
-    if (fx.variant === "TW") modeOpts.push(h("option", { value: 7, selected: fx.mode === 7 }, "Mode 7 - Full control (untested on TW)"));
-    const fp = footprint(fx);
+    const modeOpts = Object.values(MODES[fx.variant] || {}).map(m => h("option", { value: m.mode, selected: m.mode === fx.mode }, m.mode + " · " + m.footprint + " ch"));
+    if (fx.variant === "TW") modeOpts.push(h("option", { value: 7, selected: fx.mode === 7 }, "7 · 15 ch"));
     t.append(h("tr", { class: errIds.has(fx.id) ? "err" : "" },
-      h("td", null, h("div", { style: { width: "26px", height: "26px", borderRadius: "6px", background: previewCss(fx, st), border: "1px solid rgba(255,255,255,.1)" } })),
-      h("td", null, h("input", { class: "f", style: { minWidth: "110px" }, value: fx.label, onchange: e => { fx.label = e.target.value; saveFloat(fl); } }),
-        fx.notes ? h("div", { class: "muted", style: { fontSize: "11px", marginTop: "3px", maxWidth: "260px" } }, fx.notes) : null),
-      h("td", null, h("select", { class: "f", onchange: e => { fx.variant = e.target.value; fx.mode = { TW: 11, RGBW: 1, PW: 13 }[fx.variant]; saveFloat(fl, true).then(() => renderMain()); } },
-        [["TW", "Tunable white"], ["RGBW", "RGB + White"], ["PW", "Single white"]].map(([v, l]) => h("option", { value: v, selected: v === fx.variant }, l)))),
-      h("td", null, h("select", { class: "f", onchange: e => { fx.mode = parseInt(e.target.value, 10); saveFloat(fl, true).then(() => renderMain()); } }, modeOpts)),
+      h("td", null, h("div", { style: { width: "22px", height: "22px", borderRadius: "6px", background: previewCss(fx, st), border: "1px solid rgba(255,255,255,.1)" } })),
+      h("td", null, h("input", { class: "f", style: { minWidth: "96px" }, value: fx.label, title: fx.notes || "", onchange: e => { fx.label = e.target.value; saveFloat(fl); } })),
+      h("td", null, h("select", { class: "f", style: { width: "84px" }, onchange: e => { fx.variant = e.target.value; fx.mode = { TW: 11, RGBW: 1, PW: 13 }[fx.variant]; saveFloat(fl, true).then(() => renderMain()); } },
+        [["TW", "TW"], ["RGBW", "RGB"], ["PW", "White"]].map(([v, l]) => h("option", { value: v, selected: v === fx.variant }, l)))),
+      h("td", null, h("select", { class: "f", style: { width: "96px" }, onchange: e => { fx.mode = parseInt(e.target.value, 10); saveFloat(fl, true).then(() => renderMain()); } }, modeOpts)),
       fl.boxes.length > 1 ? h("td", null, h("select", { class: "f", onchange: e => { fx.box_id = e.target.value; saveFloat(fl); } }, fl.boxes.map(b => h("option", { value: b.id, selected: b.id === fx.box_id }, b.name)))) : null,
       h("td", null, h("input", { class: "f num", type: "number", inputmode: "numeric", min: 1, max: 512, value: fx.address || "", placeholder: "–",
-        onchange: e => { const v = parseInt(e.target.value, 10); fx.address = isNaN(v) ? null : clamp(v, 1, 512); saveFloat(fl, true).then(() => { e.target.closest("tr").querySelector(".chans").textContent = fx.address ? `${fx.address}–${fx.address + fp - 1}` : "–"; }); } })),
-      h("td", { class: "mono chans", style: { whiteSpace: "nowrap" } }, fx.address ? `${fx.address}–${fx.address + fp - 1}` : "–"),
-      h("td", { class: "uid" }, fx.uid || ""),
+        onchange: e => { const v = parseInt(e.target.value, 10); fx.address = isNaN(v) ? null : clamp(v, 1, 512); saveFloat(fl, true); } })),
       h("td", null, h("div", { class: "btn-row", style: { flexWrap: "nowrap" } },
         h("button", { class: "btn tiny", disabled: !fx.address, onclick: () => flashFixtures(fl, [fx]) }, "Flash"),
-        h("button", { class: "btn tiny ghost", title: "Move up", disabled: idx === 0, onclick: () => { fl.fixtures.splice(idx - 1, 0, fl.fixtures.splice(idx, 1)[0]); saveFloat(fl, true).then(() => renderMain()); } }, "↑"),
-        h("button", { class: "btn tiny ghost", onclick: async () => {
-          if (!(await confirmBox("Remove fixture?", `Remove ${fx.label} from this float?`, "Remove", "danger"))) return;
+        h("button", { class: "btn tiny ghost", title: "Remove", onclick: async () => {
+          if (!(await confirmBox("Remove fixture?", `Remove ${fx.label}?`, "Remove", "danger"))) return;
           fl.fixtures = fl.fixtures.filter(x => x.id !== fx.id); delete fl.live[fx.id]; await saveFloat(fl, true); renderMain();
         } }, "✕")))));
   });
@@ -844,13 +804,13 @@ async function scanBox(fl, b) {
 
 function scanCard(fl, b, res) {
   const card = h("div", { class: "card" });
-  card.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Scan of " + b.name),
+  card.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Scan" + (fl.boxes.length > 1 ? ": " + b.name : "")),
     res.devices.length ? h("button", { class: "btn small", title: "Pair unlinked scanned fixtures with unlinked patch fixtures, in address order", onclick: () => linkInOrder(fl, b, res) }, "Link in order") : null,
-    res.devices.length ? h("button", { class: "btn small gold", onclick: () => applyScan(fl, b, res) }, "Use scan for patch") : null,
+    res.devices.length ? h("button", { class: "btn small gold", onclick: () => applyScan(fl, b, res) }, "Use scan") : null,
     h("button", { class: "btn small ghost", onclick: () => { delete S.scan[b.id]; renderMain(); } }, "Hide")));
   if (res.error) {
     card.append(h("div", { class: "note bad" }, res.error),
-      h("p", null, "The box didn't answer RDM over the network. That's OK: set addresses and modes in the box's own page (REAP) or in Robe Toolkit, type them in the Fixtures table above, and use the Address finder below to check."),
+      h("p", { class: "hint" }, "No RDM reply. Use REAP or Robe Toolkit, then the Address finder."),
       b.ip ? h("a", { class: "btn small", href: "http://" + b.ip, target: "_blank" }, "Open REAP") : null);
     return card;
   }
@@ -859,8 +819,8 @@ function scanCard(fl, b, res) {
   res.devices.forEach(d => { if (d.address) counts[d.address] = (counts[d.address] || 0) + 1; });
   const expected = fl.fixtures.filter(f => f.box_id === b.id).length;
   card.append(h("div", { class: "note " + (res.devices.length === expected ? "ok" : "warn"), style: { marginBottom: "10px" } },
-    `Found ${res.devices.length} · schedule expects ${expected} on this box.`,
-    Object.values(counts).some(c => c > 1) ? " Some fixtures share an address; they will show the same look." : ""));
+    `Found ${res.devices.length} of ${expected}`,
+    Object.values(counts).some(c => c > 1) ? " · some share an address" : ""));
   const t = h("table", { class: "tbl" }, h("tr", null, ["RDM UID", "Found as", "Address", "Mode", "Linked fixture", ""].map(x => h("th", null, x))));
   for (const d of res.devices) {
     if (!d.ok) { t.append(h("tr", { class: "err" }, h("td", { class: "uid" }, d.uid), h("td", { colspan: 5 }, d.error))); continue; }
@@ -899,8 +859,7 @@ function scanCard(fl, b, res) {
   card.append(h("div", { class: "tbl-wrap" }, t));
   card.append(h("hr", { class: "rule" }),
     h("div", { class: "btn-row" },
-      h("button", { class: "btn small", onclick: () => pushAddresses(fl, b, res) }, "Send patch addresses to fixtures"),
-      h("span", { class: "muted", style: { fontSize: "13px" } }, "Writes each linked fixture's address and mode from the Fixtures table into the real fixture.")));
+      h("button", { class: "btn small", onclick: () => pushAddresses(fl, b, res) }, "Send addresses to fixtures")));
   return card;
 }
 
@@ -964,20 +923,19 @@ async function pushAddresses(fl, b, res) {
 
 // ------------------------------------------------------------------ address finder
 function sweepCard(fl) {
-  const card = h("div", { class: "card" });
-  const boxSel = h("select", { class: "f" }, fl.boxes.map(b => h("option", { value: b.id }, b.name + (b.ip ? " · " + b.ip : " (no IP)"))));
-  const modeSel = h("select", { class: "f" }, MODE_LIST.map(m => h("option", { value: m.variant + ":" + m.mode, selected: m.variant === "TW" && m.mode === 11 }, (m.variant === "RGBW" ? "RGB+W " : m.variant + " ") + m.name)));
+  const card = h("div", { style: { paddingTop: "6px" } });
+  const boxSel = h("select", { class: "f" }, fl.boxes.map(b => h("option", { value: b.id }, b.name)));
+  const modeSel = h("select", { class: "f" }, MODE_LIST.map(m => h("option", { value: m.variant + ":" + m.mode, selected: m.variant === "TW" && m.mode === 11 }, (m.variant === "RGBW" ? "RGB " : m.variant + " ") + "Mode " + m.mode + " (" + m.footprint + " ch)")));
   const start = h("input", { class: "f num", type: "number", value: 1, min: 1, max: 512 });
   const count = h("input", { class: "f num", type: "number", value: 30, min: 1, max: 170 });
   const secs = h("input", { class: "f num", type: "number", value: 2.5, min: 0.5, max: 10, step: 0.5 });
-  card.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Address finder"), h("span", { class: "kicker small" }, "Works without RDM")),
-    h("p", { class: "muted", style: { marginTop: 0 } }, "Lights one fixture-sized block at a time, starting at the address you give, while everything else goes dark. Watch the float: when a light comes on, the big number is its address."),
-    h("div", { class: "form-row" },
-      h("div", { class: "field" }, h("label", null, "Box"), boxSel),
-      h("div", { class: "field", style: { minWidth: "240px" } }, h("label", null, "Fixture mode"), modeSel),
+  card.append(h("p", { class: "hint", style: { marginTop: 0 } }, "Lights one address at a time. Watch which fixture comes on."),
+    h("div", { class: "form-row", style: { marginTop: "10px" } },
+      fl.boxes.length > 1 ? h("div", { class: "field" }, h("label", null, "Box"), boxSel) : null,
+      h("div", { class: "field", style: { minWidth: "180px" } }, h("label", null, "Mode"), modeSel),
       h("div", { class: "field" }, h("label", null, "Start"), start),
       h("div", { class: "field" }, h("label", null, "Steps"), count),
-      h("div", { class: "field" }, h("label", null, "Seconds"), secs),
+      h("div", { class: "field" }, h("label", null, "Sec"), secs),
       h("button", { class: "btn gold", onclick: async () => {
         const [variant, mode] = modeSel.value.split(":");
         try {
@@ -1066,111 +1024,61 @@ async function paramsModal(fl, b, d) {
 
 function renderLiveDmxSetup(body, fl) {
   const probs = fl.problems || [];
-  const unaddressed = fl.fixtures.filter(f => !f.address);
-  const unlinked = fl.fixtures.filter(f => !f.uid);
+  const overlap = probs.some(p => p.level === "error");
+  const missing = fl.fixtures.filter(f => !f.address).length;
+  const unlinked = fl.fixtures.filter(f => !f.uid).length;
+  const row = (ok, text) => h("div", { class: "note " + (ok ? "ok" : "warn"), style: { marginBottom: "8px" } }, (ok ? "✓ " : "") + text);
   body.append(h("div", { class: "card" },
-    h("h2", null, "Live DMX float"),
-    h("p", null, "In the parade this float takes live DMX from show control, so nothing gets saved into the fixtures. What matters is that every Calumma has its own address, in the mode the programmer expects, and that the box passes the incoming DMX through."),
-    h("div", { class: "grid-2" },
-      h("div", { class: "note " + (probs.some(p => p.level === "error") ? "bad" : unaddressed.length ? "warn" : "ok") },
-        probs.some(p => p.level === "error") ? "Some addresses overlap. Fix them on the Patch tab." : unaddressed.length ? unaddressed.length + " fixture(s) still need an address." : "Every fixture has its own address."),
-      h("div", { class: "note " + (unlinked.length ? "warn" : "ok") },
-        unlinked.length ? unlinked.length + " fixture(s) aren't linked to a scanned fixture, so their addresses haven't been confirmed in the hardware." : "Every fixture is linked to real hardware."))));
-  const steps = h("ol", { class: "steps" },
-    h("li", null, h("h3", null, "Address every fixture"),
-      h("p", null, "Patch tab: Scan fixtures, Link in order, check each with Identify, Use scan for patch, then Auto-address and Send patch addresses to fixtures. Pick the mode the show-control programmer wants first (Mode 11 is 3 channels per tunable white fixture)."),
-      h("button", { class: "btn small", onclick: () => { S.tab = "patch"; renderMain(); } }, "Go to Patch")),
-    h("li", null, h("h3", null, "Check each address"),
-      h("p", null, "Go live and use Flash on each fixture, or run the Address finder. Every light should answer on its own.")),
-    h("li", null, h("h3", null, "Hand the patch to show control"),
-      h("p", null, "Print the patch sheet (fixture, mode, channels) for whoever programs the parade."),
-      h("a", { class: "btn small gold", href: "/patch/" + fl.id, target: "_blank" }, "Print patch sheet")),
-    h("li", null, h("h3", null, "Set the box for the parade input"),
-      h("p", null, "Leave Output Data on Enabled. If show control arrives on a DMX cable, set Personality › DMX Input to Wired DMX. If it arrives over the network, keep Ethernet and match the Art-Net Net / Sub-Net / Universe. Power-cycle the box after changing settings, then press Release here so this app stops sending.")));
-  body.append(h("div", { class: "card" }, steps));
+    h("h2", { style: { marginBottom: "12px" } }, "Live DMX float"),
+    row(!missing, missing ? missing + " without an address" : "Every fixture has an address"),
+    row(!overlap, overlap ? "Addresses overlap" : "No overlaps"),
+    row(!unlinked, unlinked ? unlinked + " not confirmed by Scan" : "All confirmed by Scan"),
+    h("div", { class: "btn-row", style: { marginTop: "12px" } },
+      h("button", { class: "btn", onclick: () => { S.tab = "patch"; renderMain(); } }, "Patch"),
+      h("a", { class: "btn gold", href: "/patch/" + fl.id, target: "_blank" }, "Print patch sheet")),
+    h("p", { class: "hint" }, "Box for the parade: Output Data Enabled, DMX Input to match show control, then power-cycle.")));
 }
 
 function renderSave(body, fl) {
   if (fl.run_mode === "live_dmx") return renderLiveDmxSetup(body, fl);
-  const m7 = fl.fixtures.filter(f => f.mode === 7);
-  const rgbNot7 = fl.fixtures.filter(f => f.variant === "RGBW" && f.mode !== 7);
-  const tw = fl.fixtures.filter(f => f.variant !== "RGBW" && f.mode !== 7);
-  const ready = m7.filter(f => f.address);
-  const linked = fl.fixtures.filter(f => f.uid && f.address);
   const busy = S.engine.job && S.engine.job.state === "running";
+  const res = S.saveResult && S.saveResult.float === fl.id ? S.saveResult : null;
+  const main = h("div", { class: "card", style: { textAlign: "center", padding: "28px 16px" } },
+    h("h2", null, "Save this look into the fixtures"),
+    h("p", { class: "hint", style: { marginBottom: "18px" } }, "They'll come up in it at power-on, with nothing connected."),
+    h("button", { class: "btn gold big", disabled: busy || S._savingRdm, onclick: () => runSaveRdm(fl) }, S._savingRdm ? "Saving…" : "Save look"),
+    res ? h("div", { class: "big-result" }, res.saved ? `✓ Saved in ${res.saved} fixture${res.saved === 1 ? "" : "s"}` : "Nothing saved") : null,
+    res && res.bad.length ? h("div", { class: "note warn", style: { marginTop: "10px", textAlign: "left" } }, res.bad.length + " didn't take it: " + res.bad.slice(0, 5).map(x => x.label + " (" + x.why + ")").join(", ") + (res.bad.length > 5 ? "…" : "")) : null,
+    res && res.saved ? h("p", { class: "hint" }, "Now press Release. If the look stays, you're done.") : null);
+  body.append(main);
 
-  body.append(h("div", { class: "card" },
-    h("h2", null, "Make this float run on its own"),
-    h("p", null, "For the parade, each float plays its look with nothing connected. The fixtures can store one look and come up in it at power-on. Anolis documents two ways to store it. Try option 1 first; it works in any mode, including tunable white."),
-    h("div", { class: "grid-2" },
-      h("div", { class: "note " + (linked.length ? "ok" : "warn") }, h("strong", null, "Option 1 (RDM): "), linked.length + " of " + fl.fixtures.length + " fixture(s) linked by Scan and ready."),
-      h("div", { class: "note " + (ready.length ? "ok" : "warn") }, h("strong", null, "Option 2 (Mode 7): "), ready.length + " fixture(s) in Mode 7 with an address."))));
-
-  body.append(h("div", { class: "card" },
-    h("div", { class: "card-head" }, h("h2", { class: "grow" }, "Option 1: save by RDM"), h("span", { class: "kicker small" }, "E-Box manual v1.6")),
-    h("p", null, "Sets the fixture's own “Init position LEDs” setting to 1, which tells it to keep what it is showing right now as its power-on look. The app finds that setting by name in each fixture's settings list. Fixtures must be linked by Scan (Patch tab)."),
-    h("ol", { class: "steps" },
-      h("li", null, h("h3", null, "Set the look"), h("p", null, "On the Look tab, with this float live."),
-        h("button", { class: "btn small", onclick: () => { S.tab = "look"; renderMain(); } }, "Go to Look")),
-      h("li", null, h("h3", null, "Save it"), h("p", null, "Keep the float live while you press this, so the fixtures are showing the look."),
-        h("button", { class: "btn gold", disabled: !linked.length || busy, onclick: () => runSaveRdm(fl, linked) }, `Save look into ${linked.length} fixture(s) by RDM`)),
-      h("li", null, h("h3", null, "Check it"), h("p", null, "Press Release (top right) so this app stops sending. If the fixtures stay in the look, it worked. If they drop out, set the box's Output Data to Disabled and power-cycle it (see the last card), then check again.")))));
-
-  const steps = h("ol", { class: "steps" });
-  steps.append(
-    h("li", null, h("h3", null, "Switch the fixtures to Mode 7"),
-      h("p", null, "Mode 7 uses 15 channels per fixture, so the addresses change too. With RDM working, this button sets Mode 7, re-addresses the box from channel 1, and writes the new addresses. Without RDM, do it in REAP (Devices › each module › DMX preset 7 and address), then type the same values on the Patch tab."),
-      h("div", { class: "btn-row" },
-        h("button", { class: "btn small", disabled: !rgbNot7.length, onclick: () => toMode7(fl, rgbNot7) }, `Set ${rgbNot7.length} RGB fixture(s) to Mode 7`),
-        tw.length ? h("button", { class: "btn small ghost", onclick: () => toMode7(fl, tw) }, `Try Mode 7 on ${tw.length} tunable white`) : null),
-      tw.length ? h("div", { class: "note warn", style: { marginTop: "10px", fontSize: "13px" } },
-        "Tunable white: the Calumma chart lists Modes 11, 12 and 13 only, with no save channel. Use option 1 for these. Only try Mode 7 if a Scan shows the fixture offers it.") : null),
-    h("li", null, h("h3", null, "Set the look"),
-      h("p", null, "Build the look on the Look tab with this float live. What you see is what gets saved.")),
-    h("li", null, h("h3", null, "Save into the fixtures"),
-      h("p", null, "Holds the fixtures’ save command for about 5 seconds (the manual asks for at least 3), then lets go."),
-      h("button", { class: "btn gold", disabled: !ready.length || busy, onclick: () => runSave(fl, ready, false) }, `Save look into ${ready.length} fixture(s)`)),
-    h("li", null, h("h3", null, "Check what’s saved"),
-      h("p", null, "Blacks out the live look and asks the fixtures to show their stored look for 6 seconds. If they light up correctly, the save worked."),
-      h("button", { class: "btn", disabled: !ready.length || busy, onclick: () => runSave(fl, ready, true) }, "Check what’s saved")));
-  body.append(h("div", { class: "card" },
-    h("div", { class: "card-head" }, h("h2", { class: "grow" }, "Option 2: save with Mode 7"), h("span", { class: "kicker small" }, "E-Box manual v2.5")),
-    steps, jobBox()));
-
-  body.append(h("div", { class: "card" },
-    h("h2", null, "Last step, on the box"),
-    h("p", null, "If the saved look doesn't come up on its own: on the E-Box menu set Personality › Output Data › Disabled (or REAP › Personality › Output Data › Disabled, then the red “Reset now”). Power the box off and on. The fixtures should come up in the saved look with nothing connected."),
-    h("div", { class: "note", style: { fontSize: "13px" } }, h("strong", null, "To undo later: "), "set Output Data back to Enabled and power-cycle. Until you do, this app (and any console) can't control that float.")));
-
-  const list = h("div", { class: "card" });
-  list.append(h("h3", null, "Fixture status"));
-  const t = h("table", { class: "tbl" }, h("tr", null, ["Fixture", "Type", "Mode", "Address", "Option 1", "Option 2"].map(x => h("th", null, x))));
-  const ok = (txt) => h("span", { style: { color: "var(--ok)" } }, txt);
-  for (const f of fl.fixtures) t.append(h("tr", null, h("td", null, f.label), h("td", null, f.variant === "RGBW" ? "RGB + White" : f.variant),
-    h("td", null, "Mode " + f.mode), h("td", { class: "mono" }, f.address || "–"),
-    h("td", null, f.uid && f.address ? ok("ready") : "needs Scan link"),
-    h("td", null, f.mode === 7 && f.address ? ok("ready") : f.mode !== 7 ? "needs Mode 7" : "needs address")));
-  list.append(h("div", { class: "tbl-wrap" }, t));
-  body.append(list);
+  const m7 = fl.fixtures.filter(f => f.mode === 7 && f.address);
+  const rgbNot7 = fl.fixtures.filter(f => f.variant === "RGBW" && f.mode !== 7);
+  const more = h("div", { class: "card" });
+  more.append(h("details", { class: "more", style: { borderTop: 0, marginTop: 0, paddingTop: 0 } }, h("summary", null, "Look didn't stay?"),
+    h("p", null, "On the box: Personality › Output Data › Disabled, then power-cycle. (Undo: Enabled.)")));
+  more.append(h("details", { class: "more" }, h("summary", null, "Backup method: Mode 7"),
+    h("p", { class: "hint" }, "RGB fixtures only. Mode 7 uses 15 channels, so addresses change."),
+    h("div", { class: "btn-row", style: { marginTop: "10px" } },
+      h("button", { class: "btn small", disabled: !rgbNot7.length, onclick: () => toMode7(fl, rgbNot7) }, `Switch ${rgbNot7.length} to Mode 7`),
+      h("button", { class: "btn small gold", disabled: !m7.length || busy, onclick: () => runSave(fl, m7, false) }, `Save (${m7.length})`),
+      h("button", { class: "btn small", disabled: !m7.length || busy, onclick: () => runSave(fl, m7, true) }, "Check")),
+    jobBox()));
+  body.append(more);
 }
 
-async function runSaveRdm(fl, list) {
+async function runSaveRdm(fl) {
   if (!isLive(fl)) {
-    if (!(await confirmBox("Go live?", `${fl.name} isn't live, so the fixtures aren't showing the look yet. Go live on it first?`, "Go live"))) return;
+    if (!(await confirmBox("Go live first?", `Go live on ${fl.name} so the fixtures show the look?`, "Go live"))) return;
     await goLive(fl);
     await new Promise(r => setTimeout(r, 800));
   }
-  toast("Saving by RDM…");
+  S._savingRdm = true; renderMain();
   try {
-    const r = await api("POST", `/api/floats/${fl.id}/save_rdm`, { fixture_ids: list.map(f => f.id) });
-    const bad = r.results.filter(x => !x.ok);
-    modal(r.saved ? `Saved into ${r.saved} fixture(s)` : "Nothing was saved",
-      h("div", null,
-        r.saved ? h("div", { class: "note ok" }, `Sent “${(r.results.find(x => x.ok) || {}).param}” = 1. Now press Release and see if the look holds.`) : null,
-        bad.length ? h("div", { class: "note bad", style: { marginTop: "8px" } }, h("strong", null, bad.length + " not saved:"),
-          h("ul", null, bad.map(x => h("li", null, x.label + ": " + x.why)))) : null,
-        bad.length ? h("p", { class: "muted", style: { fontSize: "13px" } }, "If a fixture has no “Init position” setting, open Patch › Scan › Settings on it to see what it does offer, or use option 2.") : null));
+    const r = await api("POST", `/api/floats/${fl.id}/save_rdm`, {});
+    S.saveResult = { float: fl.id, saved: r.saved, bad: r.results.filter(x => !x.ok) };
   } catch (e) { toast(e.message, "bad"); }
+  finally { S._savingRdm = false; renderMain(); }
 }
 
 async function runSave(fl, list, verify) {
@@ -1223,44 +1131,34 @@ async function toMode7(fl, list) {
 // ------------------------------------------------------------------ setup
 async function openSetup() {
   const net = await api("GET", "/api/network");
-  const body = h("div");
   const port = net.http_port;
   const ifs = net.interfaces.filter(i => !i.ip.startsWith("127."));
   const eth2 = ifs.find(i => i.ip.startsWith("2."));
+  const body = h("div");
   body.append(
-    h("div", { class: "kicker" }, "Open on the iPad"),
-    h("ul", null, ifs.map(i => h("li", null, h("span", { class: "mono" }, `http://${i.ip}:${port}`), h("span", { class: "muted" }, "  " + i.name + (i.ip.startsWith("2.") ? " · box network" : ""))))),
-    h("div", { class: "note " + (eth2 ? "ok" : "warn") }, eth2
-      ? `Mac is on the box network (${eth2.ip} on ${eth2.name}).`
-      : "No 2.x.x.x address on this Mac. For a factory-set E-Box, set the Mac's Ethernet adapter to IP 2.0.0.10, mask 255.0.0.0, no router (System Settings › Network › your USB Ethernet › Details › TCP/IP › Manually)."),
-    net.bind_error ? h("div", { class: "note bad", style: { marginTop: "8px" } }, net.bind_error + " Quit Robe Toolkit, Luminair, xLights or other lighting apps, then restart DMX Scene Builder.") : null,
-    h("hr", { class: "rule" }),
-    h("div", { class: "kicker" }, "Options"),
-    h("div", { class: "btn-row", style: { marginTop: "8px" } },
-      h("button", { class: "btn small " + (S.sim ? "go" : "off"), onclick: async () => { const r = await api("POST", "/api/sim", { on: !S.sim }); S.sim = r.sim; openSetup(); renderMain(); } }, S.sim ? "Simulator: on" : "Simulator: off"),
-      h("button", { class: "btn small " + (S.settings.pause_during_rdm ? "go" : "off"), onclick: async () => { const r = await api("POST", "/api/settings", { pause_during_rdm: !S.settings.pause_during_rdm }); S.settings.pause_during_rdm = r.pause_during_rdm; openSetup(); } },
-        "Pause looks during RDM: " + (S.settings.pause_during_rdm ? "on" : "off"))),
-    S.sim ? h("p", { class: "muted", style: { fontSize: "13px" } }, `Simulator: set a box IP to 127.0.0.1 and use “Find boxes” (it answers on port ${S.sim.port}).`) : null,
-    h("hr", { class: "rule" }),
-    h("div", { class: "kicker" }, "Project"),
-    h("div", { class: "btn-row", style: { marginTop: "8px" } },
-      h("a", { class: "btn small", href: "/api/project", download: "dmx-scene-builder-project.json" }, "Export project"),
-      h("label", { class: "btn small" }, "Import project", h("input", { type: "file", accept: ".json,application/json", class: "hidden", onchange: async (e) => {
+    h("div", { class: "kicker small" }, "iPad address"),
+    h("div", { style: { margin: "6px 0 12px" } }, ifs.map(i => h("div", { class: "mono", style: { fontSize: "17px", color: "var(--champagne)" } }, `http://${i.ip}:${port}`))),
+    eth2 ? null : h("div", { class: "note warn" }, "Mac isn't on the box network. Ethernet: IP 2.0.0.10, mask 255.0.0.0."),
+    net.bind_error ? h("div", { class: "note bad", style: { marginTop: "8px" } }, "Art-Net port busy. Quit other lighting apps, then restart.") : null,
+    h("div", { class: "btn-row", style: { marginTop: "14px" } },
+      h("button", { class: "btn small " + (S.sim ? "go" : "off"), onclick: async () => { const r = await api("POST", "/api/sim", { on: !S.sim }); S.sim = r.sim; openSetup(); renderMain(); } }, S.sim ? "Simulator on" : "Simulator off"),
+      h("button", { class: "btn small ghost", onclick: () => { $("#modalRoot").innerHTML = ""; addFloat(); } }, "+ Float"),
+      h("a", { class: "btn small", href: "/api/project", download: "dmx-scene-builder-project.json" }, "Export"),
+      h("label", { class: "btn small" }, "Import", h("input", { type: "file", accept: ".json,application/json", class: "hidden", onchange: async (e) => {
         const file = e.target.files[0]; if (!file) return;
         try {
           const data = JSON.parse(await file.text());
-          if (!(await confirmBox("Replace project?", "This replaces every float on this Mac with the file's contents. A backup of the current project is kept.", "Replace", "danger"))) return;
-          await api("PUT", "/api/project", data); await loadState(); renderRail(); renderMain(); toast("Project imported", "ok");
+          if (!(await confirmBox("Replace project?", "Replaces every float on this Mac. A backup is kept.", "Replace", "danger"))) return;
+          await api("PUT", "/api/project", data); await loadState(); renderRail(); renderMain(); toast("Imported", "ok");
         } catch (err) { toast("Couldn't import: " + err.message, "bad"); }
       } })),
       h("a", { class: "btn small ghost", href: "/guide.html", target: "_blank" }, "Field guide")),
-    h("p", { class: "muted", style: { fontSize: "12px", marginTop: "14px" } }, `DMX Scene Builder ${S.version} · data saved on the Mac in ~/Library/Application Support/DMX Scene Builder (with backups).`));
+    h("p", { class: "hint", style: { marginTop: "14px" } }, `v${S.version}`));
   modal("Setup", body);
 }
 
 // ------------------------------------------------------------------ boot
 async function boot() {
-  $("#railToggle").onclick = () => $("#rail").classList.toggle("open");
   document.addEventListener("pointerdown", () => { S.pointerDown = true; }, true);
   document.addEventListener("pointerup", () => { S.pointerDown = false; }, true);
   document.addEventListener("pointercancel", () => { S.pointerDown = false; }, true);

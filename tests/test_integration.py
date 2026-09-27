@@ -246,9 +246,8 @@ class RdmSaveTests(IntegrationTests):
         self.api.call("POST", "/api/output", {"action": "activate", "float_id": fl["id"]})
         self.api.call("POST", "/api/floats/%s/live" % fl["id"], {"changes": {"t": {"dim": 0.25, "cct": 6500}}})
         self.assertTrue(wait_for(lambda: m.dmx[:2] == bytes([255, 64])), m.dmx)
-        res = self.api.call("POST", "/api/floats/%s/save_rdm" % fl["id"], {"fixture_ids": ["t", "u"]})
-        self.assertEqual(res["saved"], 1, res)
-        self.assertIn("not linked", res["results"][1]["why"])
+        res = self.api.call("POST", "/api/floats/%s/save_rdm" % fl["id"], {})
+        self.assertEqual(res["saved"], 6, res)   # every module on the box, no linking needed
         self.assertEqual(m.saved_via, "rdm")
         self.assertEqual(m.saved_initial[:2], bytes([255, 64]))
         self.api.call("POST", "/api/output", {"action": "release"})

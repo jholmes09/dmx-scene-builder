@@ -26,6 +26,7 @@ def main(argv=None):
     ap.add_argument("--artnet-port", type=int, default=6454)
     ap.add_argument("--data", default=None, help="data folder (default ~/Library/Application Support/DMX Scene Builder)")
     ap.add_argument("--sim", action="store_true", help="start with the virtual E-Box running")
+    ap.add_argument("--sim-port", type=int, default=6455, help="UDP port for the virtual E-Box")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--seed", default=os.environ.get("SCENEBUILDER_SEED"),
                     help="project file to load on first run (default: the demo floats)")
@@ -40,7 +41,7 @@ def main(argv=None):
         print("Loaded starting floats from %s." % seed.name)
 
     ctl = ArtNetController(port=args.artnet_port).start()
-    app = App(store, ctl)
+    app = App(store, ctl, sim_port=args.sim_port)
     if args.sim:
         app.sim_on()
     try:

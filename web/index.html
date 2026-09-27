@@ -17,22 +17,15 @@
 <body>
 <div class="app">
   <header class="topbar">
-    <button class="btn small ghost rail-toggle" id="railToggle" aria-label="Floats">&#9776; Floats</button>
     <img class="logo" src="img/logo.png" alt="Jeff Holmes Presents">
-    <div class="brand">
-      <span class="kicker small">Jeff Holmes Presents</span>
-      <span class="title">DMX Scene Builder</span>
-    </div>
+    <select id="floatPick" class="float-pick" aria-label="Float"></select>
     <div class="spacer"></div>
     <span class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">Starting</span></span>
-    <button class="btn small off" id="blackoutBtn" title="Blackout the live float">Blackout</button>
-    <button class="btn small off" id="releaseBtn" title="Stop sending to the boxes">Release</button>
-    <button class="btn small ghost" id="setupBtn" aria-label="Setup">&#9881; Setup</button>
+    <button class="btn small off" id="blackoutBtn">Blackout</button>
+    <button class="btn small off" id="releaseBtn">Release</button>
+    <button class="btn small ghost icon" id="setupBtn" aria-label="Setup">&#9881;</button>
   </header>
-  <div class="body">
-    <nav class="rail" id="rail"></nav>
-    <main class="main" id="main"><div class="main-inner" id="mainInner"></div></main>
-  </div>
+  <main class="main" id="main"><div class="main-inner" id="mainInner"></div></main>
 </div>
 <div id="modalRoot"></div>
 <div id="toastRoot"></div>

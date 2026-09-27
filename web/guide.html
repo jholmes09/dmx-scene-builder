@@ -134,7 +134,7 @@
     <h2>Daily workflow in the app</h2>
     <ol class="steps">
       <li>Pick the float in the list on the left.</li>
-      <li>Go to the <strong>Patch &amp; addressing</strong> tab.</li>
+      <li>Go to the <strong>Patch</strong> tab.</li>
       <li>Press <strong>Find boxes on network</strong>, then press <strong>Use for E-Box A</strong> (or B) on the box that answers.</li>
       <li>Press <strong>Scan fixtures (RDM)</strong>.</li>
       <li>Press <strong>Link in order</strong>, and check each one with Identify (it flashes that fixture).</li>
@@ -171,10 +171,10 @@
     <p>The <strong>Save to fixtures</strong> tab has two ways to make a float hold its look with nothing connected. Try option 1 first.</p>
 
     <h3>Option 1: Save by RDM</h3>
-    <p>Works in any mode, including tunable white. Fixtures must already be linked by Scan.</p>
+    <p>Works in any mode, including tunable white. No Scan needed: it finds every fixture on the box by itself.</p>
     <ol class="plain">
       <li>Go to the <strong>Save to fixtures</strong> tab.</li>
-      <li>With the float live and showing the look you want, press <strong>Save look into N fixture(s) by RDM</strong>.</li>
+      <li>With the float live and showing the look you want, press <strong>Save look</strong> on the Save tab.</li>
       <li>The app sets each fixture's own manufacturer setting called <strong>Init position LEDs</strong> to 1. It finds that setting by name in the fixture's own settings list. This keeps the current look as the fixture's power-on look.</li>
       <li>Check it: press <strong>Release</strong>. If the look holds, you're done.</li>
       <li>If it doesn't hold: on the box, set <strong>Personality &gt; Output Data</strong> to Disabled and power cycle the box, then check again.</li>
@@ -206,7 +206,7 @@
     <p><strong>Day one plan:</strong></p>
     <ol class="plain">
       <li>Scan a tunable white fixture, then open <strong>Patch &gt; Scan &gt; Settings</strong> on that fixture and look for "Init position LEDs".</li>
-      <li>If it's there, use <strong>Save look into fixture(s) by RDM</strong> on the Save to fixtures tab.</li>
+      <li>If it's there, use <strong>Save look</strong> on the Save tab.</li>
       <li>If a fixture has no "Init position" setting, the app's Settings list shows whatever it does offer instead. In that case, fall back to: putting a small DMX or Art-Net playback unit on the float to hold the look, or asking Anolis or Robe support how tunable white modules store a power-on look.</li>
     </ol>
     <p>Draft question for support, ready to copy and send:</p>
@@ -219,7 +219,7 @@
   <div class="card">
     <span class="kicker small">Some floats are different</span>
     <h2>Live DMX floats</h2>
-    <p>A float set to <strong>On live DMX input</strong> (Patch &gt; Float details) does not run stand-alone. It takes live DMX from show control during the parade. Its last tab is called <strong>Parade setup</strong>.</p>
+    <p>A float set to <strong>On live DMX input</strong> (Patch &gt; Float details) does not run stand-alone. It takes live DMX from show control during the parade. Its last tab is called <strong>Parade</strong>.</p>
     <ol class="plain">
       <li>Every Calumma needs its own address.</li>
       <li>Pick the mode the show-control programmer wants (Mode 11 = 3 channels per tunable white fixture).</li>
