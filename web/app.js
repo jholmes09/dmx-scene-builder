@@ -819,7 +819,7 @@ function bulkBar(fl) {
     const v = typeSel.value || (types.length === 1 ? types[0] : null);
     const modes = v ? modeFor(v) : [7];  // mixed types: only Mode 7 is common to all
     modeSel.innerHTML = "";
-    modeSel.append(h("option", { value: "" }, "Mode…"), modes.map(m => {
+    modeSel.append(h("option", { value: "" }, "Mode…"), ...modes.map(m => {
       const fp = ((MODES[v === "TW" && m === 7 ? "RGBW" : (v || "RGBW")] || {})[m] || {}).footprint;
       return h("option", { value: m }, "Mode " + m + (fp ? " · " + fp + " ch" : ""));
     }));
