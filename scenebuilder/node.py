@@ -298,8 +298,11 @@ class ArtNetController:
         # Directed broadcast per interface (2.255.255.255 on a Robe-default Ethernet port);
         # 255.255.255.255 would only leave via the primary interface on macOS.
         dests = set()
+        itfs = local_interfaces()
         preferred = self.preferred_interface
-        for itf in local_interfaces():
+        if preferred and preferred not in {i["ip"] for i in itfs}:
+            preferred = None  # the pinned adapter is unplugged right now: search on every adapter instead
+        for itf in itfs:
             if preferred and itf["ip"] != preferred:
                 continue  # a specific adapter is preferred: only broadcast on it
             is_link_local = itf["ip"].startswith("169.254.")

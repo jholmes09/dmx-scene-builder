@@ -184,3 +184,16 @@ class InterfaceApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MissingPinnedAdapterTests(unittest.TestCase):
+    def test_poll_falls_back_when_pinned_adapter_is_gone(self):
+        ctl = ArtNetController(port=0).start()
+        sent = []
+        ctl._send = lambda data, ip, port: sent.append(ip) or True
+        try:
+            ctl.set_preferred_interface("10.254.254.254")  # not on this machine
+            ctl.poll([], wait=0.05)
+            self.assertTrue(sent, "should still broadcast on the adapters that exist")
+        finally:
+            ctl.stop()
