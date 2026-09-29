@@ -197,3 +197,16 @@ class MissingPinnedAdapterTests(unittest.TestCase):
             self.assertTrue(sent, "should still broadcast on the adapters that exist")
         finally:
             ctl.stop()
+
+
+class HostSweepTests(unittest.TestCase):
+    def test_hosts_on_24(self):
+        from scenebuilder.node import _hosts
+        h = _hosts("10.248.31.101", "255.255.255.0")
+        self.assertEqual(len(h), 253)          # .1-.254 minus ourselves
+        self.assertIn("10.248.31.19", h)
+        self.assertNotIn("10.248.31.101", h)
+
+    def test_big_network_skipped(self):
+        from scenebuilder.node import _hosts
+        self.assertEqual(_hosts("2.0.0.10", "255.0.0.0"), [])

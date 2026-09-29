@@ -116,6 +116,20 @@ def local_interfaces() -> List[dict]:
     return _windows_interfaces() if platform.system() == "Windows" else _unix_interfaces()
 
 
+def _hosts(ip: str, mask: str, limit: int = 1022) -> List[str]:
+    """Every host address on ip/mask, if the network is small enough to poll one by one."""
+    try:
+        ipn = struct.unpack(">I", socket.inet_aton(ip))[0]
+        mn = struct.unpack(">I", socket.inet_aton(mask))[0]
+    except OSError:
+        return []
+    size = (~mn & 0xFFFFFFFF) + 1
+    if size - 2 > limit or size < 4:
+        return []
+    net = ipn & mn
+    return [socket.inet_ntoa(struct.pack(">I", net + i)) for i in range(1, size - 1) if net + i != ipn]
+
+
 class ArtNetController:
     def __init__(self, bind_ip: str = "0.0.0.0", port: int = artnet.ARTNET_PORT, fps: float = 30.0):
         # The listening socket always binds to 0.0.0.0 (see start()): binding to one adapter's
@@ -308,6 +322,11 @@ class ArtNetController:
             is_link_local = itf["ip"].startswith("169.254.")
             if itf.get("broadcast") and not itf["ip"].startswith("127.") and (not is_link_local or itf["ip"] == preferred):
                 dests.add((itf["broadcast"], artnet.ARTNET_PORT))
+                # Also ask every address on small networks directly: a box whose netmask differs from
+                # the network's (e.g. Robe's factory 255.0.0.0 on a 255.255.255.0 router) ignores the
+                # broadcast but always answers a poll sent straight to it.
+                for host in _hosts(itf["ip"], itf.get("netmask") or ""):
+                    dests.add((host, artnet.ARTNET_PORT))
         for t in extra_targets:
             dests.add((t[0], int(t[1])))
         started = time.time()
