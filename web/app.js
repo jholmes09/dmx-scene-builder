@@ -795,6 +795,18 @@ async function scanBox(fl, b) {
     const r = await api("POST", `/api/floats/${fl.id}/scan`, { box_id: b.id });
     S.scan[b.id] = r;
     const n = r.devices.length;
+    // Every light found matches exactly one patch fixture by address: link them without an extra tap.
+    const autoOk = n && r.devices.every(d => d.ok) && r.devices.every(d => {
+      const same = fl.fixtures.filter(f => f.box_id === b.id && (f.uid === d.uid || (f.address === d.address && !f.uid)));
+      return same.length === 1;
+    });
+    if (autoOk) {
+      for (const d of r.devices) {
+        const fx = fl.fixtures.find(f => f.box_id === b.id && (f.uid === d.uid || f.address === d.address));
+        S.links[d.uid] = fx.id;
+      }
+      await applyScan(fl, b, r);
+    }
     toast(n ? `Found ${n} fixture(s) on ${b.name}` : `${b.name} answered but reported no fixtures`, n ? "ok" : "bad");
   } catch (e) {
     S.scan[b.id] = { error: e.message, devices: [] };
@@ -829,7 +841,11 @@ function scanCard(fl, b, res) {
     const variant = d.variant_guess;
     const avail = (d.modes_available && d.modes_available.length) ? d.modes_available : Object.keys(MODES[variant] || {}).map(Number);
     const modeSel = h("select", { class: "f" }, avail.map(m => h("option", { value: m, selected: m === d.mode }, "Mode " + m + " (" + (((MODES[variant] || MODES.RGBW)[m] || {}).footprint || "?") + " ch)")));
-    if (!(d.uid in S.links)) S.links[d.uid] = linked ? linked.id : "";
+    if (!(d.uid in S.links)) {
+      // Back-end convenience: a scanned light whose address matches exactly one patch fixture on this box links itself.
+      const same = fl.fixtures.filter(f => f.box_id === b.id && f.address === d.address && !f.uid);
+      S.links[d.uid] = linked ? linked.id : (same.length === 1 ? same[0].id : "");
+    }
     const cur = S.links[d.uid];
     const linkSel = h("select", { class: "f", onchange: e => { S.links[d.uid] = e.target.value; } },
       h("option", { value: "" }, "— not linked —"),
@@ -1042,29 +1058,52 @@ function renderLiveDmxSetup(body, fl) {
 function renderSave(body, fl) {
   if (fl.run_mode === "live_dmx") return renderLiveDmxSetup(body, fl);
   const busy = S.engine.job && S.engine.job.state === "running";
-  const res = S.saveResult && S.saveResult.float === fl.id ? S.saveResult : null;
-  const main = h("div", { class: "card", style: { textAlign: "center", padding: "28px 16px" } },
-    h("h2", null, "Save this look into the fixtures"),
-    h("p", { class: "hint", style: { marginBottom: "18px" } }, "They'll come up in it at power-on, with nothing connected."),
-    h("button", { class: "btn gold big", disabled: busy || S._savingRdm, onclick: () => runSaveRdm(fl) }, S._savingRdm ? "Saving…" : "Save look"),
-    res ? h("div", { class: "big-result" }, res.saved ? `✓ Saved in ${res.saved} fixture${res.saved === 1 ? "" : "s"}` : "Nothing saved") : null,
-    res && res.bad.length ? h("div", { class: "note warn", style: { marginTop: "10px", textAlign: "left" } }, res.bad.length + " didn't take it: " + res.bad.slice(0, 5).map(x => x.label + " (" + x.why + ")").join(", ") + (res.bad.length > 5 ? "…" : "")) : null,
-    res && res.saved ? h("p", { class: "hint" }, "Now press Release. If the look stays, you're done.") : null);
-  body.append(main);
+  const not7 = fl.fixtures.filter(f => f.mode !== 7);
+  const ready = fl.fixtures.filter(f => f.mode === 7 && f.address);
+  const unlinked = not7.filter(f => !f.uid);
+  const step = (n, title, ...kids) => h("div", { class: "card" }, h("div", { class: "kicker small" }, "Step " + n), h("h3", { style: { margin: "4px 0 10px" } }, title), ...kids);
 
-  const m7 = fl.fixtures.filter(f => f.mode === 7 && f.address);
-  const rgbNot7 = fl.fixtures.filter(f => f.variant === "RGBW" && f.mode !== 7);
-  const more = h("div", { class: "card" });
-  more.append(h("details", { class: "more", style: { borderTop: 0, marginTop: 0, paddingTop: 0 } }, h("summary", null, "Look didn't stay?"),
-    h("p", null, "On the box: Personality › Output Data › Disabled, then power-cycle. (Undo: Enabled.)")));
-  more.append(h("details", { class: "more" }, h("summary", null, "Backup method: Mode 7"),
-    h("p", { class: "hint" }, "RGB fixtures only. Mode 7 uses 15 channels, so addresses change."),
-    h("div", { class: "btn-row", style: { marginTop: "10px" } },
-      h("button", { class: "btn small", disabled: !rgbNot7.length, onclick: () => toMode7(fl, rgbNot7) }, `Switch ${rgbNot7.length} to Mode 7`),
-      h("button", { class: "btn small gold", disabled: !m7.length || busy, onclick: () => runSave(fl, m7, false) }, `Save (${m7.length})`),
-      h("button", { class: "btn small", disabled: !m7.length || busy, onclick: () => runSave(fl, m7, true) }, "Check")),
+  body.append(step(1, not7.length ? `Switch ${not7.length} light(s) to Mode 7` : "All lights are in Mode 7 ✓",
+    not7.length ? h("div", null,
+      h("button", { class: "btn gold", disabled: busy || null, onclick: () => toMode7(fl, not7) }, "Switch to Mode 7"),
+      unlinked.length ? h("p", { class: "hint" }, `Scan first (Patch tab) so the app can change ${unlinked.length} of them on the lights themselves.`) : null)
+    : h("p", { class: "hint" }, "Addresses: " + ready.map(f => f.address).join(", "))));
+
+  body.append(step(2, "Set the look",
+    h("button", { class: "btn", onclick: () => { S.tab = "look"; renderMain(); } }, "Go to Look")));
+
+  body.append(step(3, "Save it into the lights",
+    h("div", { class: "btn-row" },
+      h("button", { class: "btn gold big", disabled: !ready.length || busy || null, onclick: () => runSave(fl, ready, false) }, `Save look (${ready.length})`),
+      h("button", { class: "btn", disabled: !ready.length || busy || null, onclick: () => runSave(fl, ready, true) }, "Check saved look")),
     jobBox()));
-  body.append(more);
+
+  const boxCard = step(4, "Play it on its own", h("div", { id: "boxOut" }, h("p", { class: "hint" }, "Reading the box…")));
+  body.append(boxCard);
+  refreshBoxOut(fl);
+}
+
+async function refreshBoxOut(fl) {
+  const el = $("#boxOut");
+  if (!el) return;
+  const rows = [];
+  for (const b of fl.boxes.filter(b => b.ip)) {
+    let st = null;
+    try { st = await api("POST", `/api/floats/${fl.id}/box`, { box_id: b.id }); } catch (e) { st = { error: e.message }; }
+    const playing = st && st.output_data === "disabled";
+    rows.push(h("div", { style: { margin: "8px 0" } },
+      h("div", null, (fl.boxes.length > 1 ? b.name + ": " : "") + (st.error ? "can't read the box" : playing ? "Playing the saved look (app can't control it)" : "Following the app")),
+      st.error ? null : h("button", { class: "btn " + (playing ? "" : "gold"), style: { marginTop: "6px" }, onclick: async () => {
+        const msg = playing ? "Give control back to the app? The box restarts (about 10 s)." : "Play the saved look? The box stops listening to the app and restarts (about 10 s).";
+        if (!(await confirmBox(playing ? "Back to app control" : "Play saved look", msg, "Yes"))) return;
+        try { await api("POST", `/api/floats/${fl.id}/box`, { box_id: b.id, action: "output_data", enabled: playing }); toast("Box restarting…", "ok"); }
+        catch (e) { toast(e.message, "bad"); }
+        setTimeout(() => refreshBoxOut(fl), 12000);
+      } }, playing ? "Back to app control" : "Play saved look")));
+  }
+  el.innerHTML = "";
+  if (!rows.length) el.append(h("p", { class: "hint" }, "Set the box IP on the Patch tab."));
+  rows.forEach(r => el.append(r));
 }
 
 async function runSaveRdm(fl) {

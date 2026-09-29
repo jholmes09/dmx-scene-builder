@@ -15,6 +15,7 @@ from urllib.parse import urlparse, parse_qs
 from . import __version__, artnet, fixtures, rdm
 from .engine import Engine
 from .node import ArtNetController, RdmError, local_interfaces
+from .reap import Reap, ReapError, uid_from_str as reap_uid, uid_to_str as reap_uid_str
 from .simulator import EBoxSimulator, demo_box
 from .store import Store, new_box, new_fixture, new_float, new_id, patch_problems
 
@@ -34,6 +35,7 @@ class App:
         # (box ip, model_id) -> {personality index: {"mode": n or None, "footprint": f, "description": s}}
         self.personalities: dict = {}
         self._identify_timers: dict = {}
+        self.reap_devices: dict = {}  # box ip -> {uid_str: device dict from the box's web page}
 
     # ---------------------------------------------------------- simulator
     def sim_on(self):
@@ -92,6 +94,16 @@ class App:
 
     def scan(self, fl: dict, box_id: str, flush: bool = False) -> dict:
         ip, port, pa = self.box_target(fl, box_id)
+        # Preferred: the box's own web page runs RDM on its outputs. On a real E-Box Remote (6.6)
+        # this finds every Calumma in Pass-Thr, while Art-Net RDM only ever sees the box itself.
+        reap = Reap(ip)
+        if reap.available():
+            with self.rdm_session():
+                devs = reap.discover()
+            self.reap_devices[ip] = {reap_uid_str(d["d_uid"]): d for d in devs}
+            devices = [reap_scan_entry(d) for d in sorted(devs, key=lambda d: d.get("dmx_a", 0))]
+            return {"box_id": box_id, "ip": ip, "port_address": pa, "devices": devices, "via": "box web page",
+                    "time": time.time()}
         with self.rdm_session():
             uids = self.ctl.tod(ip, port, pa, flush=flush)
             devices = []
@@ -194,6 +206,29 @@ def mode_from_description(index: int, d: dict):
         if index in modes and len(modes[index]["roles"]) == d.get("footprint"):
             return index
     return None
+
+
+def reap_variant(mode: int) -> str:
+    if mode in (11, 12):
+        return "TW"
+    if mode == 13:
+        return "PW"
+    return "RGBW"
+
+
+def reap_scan_entry(d: dict) -> dict:
+    mode = int(d.get("dmx_p") or 1)
+    variant = reap_variant(mode)
+    avail = sorted(fixtures.MODES[variant]) + ([fixtures.SAVE_MODE] if variant != "RGBW" else [])
+    fp = None
+    try:
+        fp = fixtures.footprint(variant if mode in fixtures.MODES[variant] else "RGBW", mode)
+    except ValueError:
+        pass
+    return {"uid": reap_uid_str(d["d_uid"]), "ok": True, "address": int(d.get("dmx_a", 0)) + 1, "mode": mode,
+            "personality": mode, "personality_count": d.get("dmx_p_c"), "footprint": fp,
+            "label": (d.get("u_l") or "").strip(), "model": d.get("d_l") or "", "variant_guess": variant,
+            "modes_available": avail, "kind": "fixture", "via": "reap", "terminator": d.get("dmx_t")}
 
 
 def guess_variant(mode, model: str, pers_name: str, modes_available=()) -> str:
@@ -441,6 +476,8 @@ class Handler(BaseHTTPRequestHandler):
             if rest == ["scan"] and method == "POST":
                 b = self._body()
                 return self._json(app.scan(fl, b["box_id"], bool(b.get("flush"))))
+            if rest == ["box"] and method == "POST":
+                return self._box_action(fl, self._body())
             if rest == ["rdm"] and method == "POST":
                 return self._rdm_action(fl, self._body())
             if rest == ["sweep"] and method == "POST":
@@ -552,9 +589,86 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(entry)
         raise KeyError("no such endpoint")
 
+    def _reap_action(self, fl, b, ip, dev):
+        """Same actions as _rdm_action, through the box's web page."""
+        app = self.app
+        reap = Reap(ip)
+        act = b["action"]
+        d_uid = reap_uid(b["uid"])
+        label = (dev.get("u_l") or "").strip()
+        addr, mode = int(dev.get("dmx_a", 0)) + 1, int(dev.get("dmx_p") or 1)
+        with app.rdm_session():
+            if act == "identify":
+                on = bool(b.get("on", True))
+                reap.identify(d_uid, on)
+                key = (ip, d_uid)
+                t = app._identify_timers.pop(key, None)
+                if t:
+                    t.cancel()
+                if on:
+                    def off():
+                        try:
+                            with app.scan_lock:
+                                reap.identify(d_uid, False)
+                        except ReapError:
+                            pass
+                    t = threading.Timer(15.0, off)
+                    t.daemon = True
+                    t.start()
+                    app._identify_timers[key] = t
+            elif act == "address":
+                addr = int(b["address"])
+                reap.setup(d_uid, label, addr, mode, dev)
+                dev["dmx_a"] = addr - 1
+                self._write_back(fl, b["uid"], address=addr)
+            elif act == "mode":
+                mode = int(b["mode"])
+                reap.setup(d_uid, label, addr, mode, dev)
+                dev["dmx_p"] = mode
+                self._write_back(fl, b["uid"], mode=mode)
+            elif act == "label":
+                label = str(b["label"])[:32]
+                reap.setup(d_uid, label, addr, mode, dev)
+                dev["u_l"] = label
+            elif act == "params":
+                params = []
+                if int(dev.get("sp") or 0) & 1:
+                    params.append({"pid": 1, "pid_hex": "box", "description": "DMX terminator (last light on a cable)",
+                                   "size": 1, "data_type": "uint8", "command_class": "GET_SET", "can_get": True,
+                                   "can_set": True, "min": 0, "max": 1, "default": 0,
+                                   "value": 1 if dev.get("dmx_t") == "on" else 0})
+                return self._json({"ok": True, "uid": b["uid"], "params": params, "save_pid": None})
+            elif act == "set_param":
+                if int(b["pid"]) != 1:
+                    raise ValueError("That setting isn't available through this box.")
+                on = bool(int(b["value"]))
+                reap.setup(d_uid, label, addr, mode, dev, terminator=on)
+                dev["dmx_t"] = "on" if on else "off"
+            elif act != "info":
+                raise ValueError("unknown RDM action")
+        app.engine.refresh()
+        info = {"address": int(dev.get("dmx_a", 0)) + 1, "mode": int(dev.get("dmx_p") or 1),
+                "personality": int(dev.get("dmx_p") or 1)}
+        return self._json({"ok": True, "uid": b["uid"], "info": info, "rev": app.store.data.get("rev", 0)})
+
+    def _box_action(self, fl, b):
+        """Box-wide settings through its web page: read them, or switch Output data."""
+        ip, _, _ = self.app.box_target(fl, b["box_id"])
+        reap = Reap(ip)
+        if b.get("action") == "output_data":
+            self.app.engine.release()
+            reap.set_other(output_data=bool(b["enabled"]))
+            reap.restart()
+            return self._json({"ok": True, "restarting": True})
+        s = reap.other_settings()
+        return self._json({"ok": True, "output_data": s.get("ic_od"), "mode": s.get("ebm"), "dmx_hold": s.get("dmxh")})
+
     def _rdm_action(self, fl, b):
         app = self.app
         ip, port, pa = app.box_target(fl, b["box_id"])
+        dev = app.reap_devices.get(ip, {}).get(b["uid"])
+        if dev is not None:
+            return self._reap_action(fl, b, ip, dev)
         uid = rdm.uid_from_str(b["uid"])
         act = b["action"]
         with app.rdm_session():
