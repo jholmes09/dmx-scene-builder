@@ -14,6 +14,30 @@ SAVE_HOLD_S = 4.5    # manual: hold >= 3 s
 SETTLE_S = 1.5
 
 
+VCW_WHITES = {1800: 1, 2700: 3, 3200: 5, 4200: 7, 5600: 9, 6500: 11}  # Mode 7 virtual colour wheel presets
+
+
+def white_test_bytes(method: int, k: int) -> bytes:
+    """Mode 7 frame for comparing white methods on RGB + cool-white Calumma (dimmer ~60%)."""
+    ctc = fixtures.kelvin_to_ctc(k)
+    r = g = b = w = 0
+    vcw = 0
+    if method == 1:            # app's current method: all emitters full + CTC
+        r = g = b = w = 255
+    elif method == 2:          # fixture's built-in calibrated white preset (nearest listed K)
+        vcw = VCW_WHITES[min(VCW_WHITES, key=lambda x: abs(x - k))]
+        ctc = 0
+    elif method == 3:          # cool white LED only
+        w, ctc = 255, 0
+    elif method == 4:          # all emitters full, no correction
+        r = g = b = w = 255
+        ctc = 0
+    elif method == 5:          # white LED + CTC
+        w = 255
+    # special r rf g gf b bf w wf gc ctc vcw shutter dim dimf
+    return bytes([0, r, 0, g, 0, b, 0, w, 0, 128, ctc, vcw, 255, 153, 0])
+
+
 class Engine:
     def __init__(self, store: Store, ctl: ArtNetController):
         self.store = store
@@ -24,6 +48,7 @@ class Engine:
         self.special: Dict[str, int] = {}         # fixture id -> Special functions byte override
         self.dark: set = set()                    # fixture ids forced to dim 0 (verify step)
         self.sweep: Optional[dict] = None         # address-finder overlay
+        self.white_test: Optional[dict] = None    # {"method": 1-5, "k": kelvin}: compare ways of making white
         self._paused_for_rdm = 0
         self._resume_after_rdm = False
         self.hold = False                         # send all-zero universes (fixtures being re-moded/re-addressed)
@@ -41,6 +66,7 @@ class Engine:
             self.dark.clear()
             self.sweep = None
             self.hold = False
+            self.white_test = None
             want = bool(fid) and output
             if self._paused_for_rdm:
                 self._resume_after_rdm = want
@@ -55,6 +81,7 @@ class Engine:
         with self.lock:
             self._resume_after_rdm = False
             self.hold = False
+            self.white_test = None
             self.ctl.output_enabled = False
             self.ctl.clear_targets()
             if self.job and self.job.get("state") == "running":
@@ -81,6 +108,7 @@ class Engine:
                     "blackout": self.blackout, "flashing": list(self.flash.keys()),
                     "job": dict(self.job) if self.job else None,
                     "sweep": {k: v for k, v in self.sweep.items() if k != "target"} if self.sweep else None,
+                    "white_test": self.white_test,
                     "paused_for_rdm": self._paused_for_rdm > 0, "hold": self.hold,
                     "packets_sent": self.ctl.packets_sent, "packets_received": self.ctl.packets_received,
                     "bind_error": self.ctl.bind_error, "send_error": self.ctl.last_send_error,
@@ -119,6 +147,9 @@ class Engine:
                     data = fixtures.render(effective_variant(fx), fx["mode"], state, self.special.get(fx["id"], 0))
                 except ValueError:
                     continue
+                wt = self.white_test
+                if wt and effective_variant(fx) == "RGBW" and fx["mode"] == fixtures.SAVE_MODE:
+                    data = white_test_bytes(wt["method"], wt["k"])
                 a = fx["address"] - 1
                 buf = out[key]
                 buf[a:a + len(data)] = data[:512 - a]
@@ -175,6 +206,13 @@ class Engine:
     def flash_fixture(self, fx_id: str, seconds: float = 6.0):
         with self.lock:
             self.flash[fx_id] = time.monotonic() + seconds
+        self.refresh()
+
+    def set_white_test(self, method: Optional[int], k: int = 6500):
+        with self.lock:
+            if method and self.job and self.job.get("state") == "running":
+                raise RuntimeError("A save is running. Wait for it to finish.")
+            self.white_test = {"method": int(method), "k": int(k)} if method else None
         self.refresh()
 
     def set_blackout(self, on: bool):

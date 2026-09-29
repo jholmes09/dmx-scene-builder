@@ -451,6 +451,8 @@ class Handler(BaseHTTPRequestHandler):
                 eng.resume()
             elif action == "blackout":
                 eng.set_blackout(b.get("on", True))
+            elif action == "white_test":
+                eng.set_white_test(b.get("method"), int(b.get("k") or 6500))
             elif action == "hold":
                 eng.set_hold(bool(b.get("on", True)))
             else:

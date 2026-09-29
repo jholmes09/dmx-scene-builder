@@ -1218,7 +1218,8 @@ async function openSetup() {
           await startMerge(data);
         } catch (err) { toast("Couldn't read that file: " + err.message, "bad"); }
       } })),
-      h("a", { class: "btn small ghost", href: "/guide.html", target: "_blank" }, "Field guide")),
+      h("a", { class: "btn small ghost", href: "/guide.html", target: "_blank" }, "Field guide"),
+      h("button", { class: "btn small ghost", onclick: () => { $("#modalRoot").innerHTML = ""; whiteTest(); } }, "White test")),
     saveInfo(),
     h("p", { class: "hint", style: { marginTop: "14px" } }, `v${S.version}`));
   if (ifs.length > 1) pickWrap.append(networkPicker(net, ifs));
@@ -1306,6 +1307,29 @@ async function chooseFolder(start) {
     try { await api("POST", "/api/settings", { mirror_dir: cur.path }); toast("Backups will copy here", "ok"); setTimeout(openSetup, 50); }
     catch (e) { toast(e.message, "bad"); return true; }
   } }]);
+}
+
+function whiteTest() {
+  // Temporary: step every Mode 7 RGBW light on the live float through ways of making white.
+  const fl = curFloat();
+  if (!fl || !isLive(fl)) { toast("Go live on a float with Mode 7 RGBW lights first.", "bad"); return; }
+  let method = 1, k = 6500;
+  const names = { 1: "All colors + color temp channel (current)", 2: "Fixture's built-in white preset", 3: "Cool white LED only",
+    4: "All colors full, no correction", 5: "Cool white LED + color temp channel" };
+  const body = h("div");
+  const send = async () => { try { await api("POST", "/api/output", { action: "white_test", method, k }); } catch (e) { toast(e.message, "bad"); } draw(); };
+  const draw = () => {
+    body.innerHTML = "";
+    body.append(
+      h("div", { class: "kicker small" }, "Method"),
+      h("div", { class: "seg", style: { margin: "6px 0 4px" } }, [1, 2, 3, 4, 5].map(n => h("button", { class: n === method ? "on" : "", onclick: () => { method = n; send(); } }, String(n)))),
+      h("p", { style: { margin: "4px 0 14px", fontWeight: 600 } }, method + ": " + names[method]),
+      h("div", { class: "kicker small" }, "Color temperature"),
+      h("div", { class: "seg", style: { marginTop: "6px" } }, [2700, 3200, 4200, 5600, 6500].map(x => h("button", { class: x === k ? "on" : "", onclick: () => { k = x; send(); } }, x + "K"))),
+      h("p", { class: "hint" }, "Every Mode 7 RGBW light on this float shows it. Method 3 ignores the color temperature."));
+  };
+  send();
+  modal("White test", body, [{ label: "Stop test", fn: async () => { await api("POST", "/api/output", { action: "white_test", method: null }); } }]);
 }
 
 function networkPicker(net, ifs) {
