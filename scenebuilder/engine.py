@@ -152,6 +152,17 @@ class Engine:
                                            cal if effective_variant(fx) == "RGBW" else None)
                 except ValueError:
                     continue
+                if fx["id"] in self.dark and not self.blackout and not self.sweep:
+                    # "Check saved look": colours off but dimmer FULL and shutter open, so a fixture that
+                    # applies the live dimmer on top of its saved look still shows it (dimmer 0 hid it).
+                    roles = fixtures.mode_info(effective_variant(fx), fx["mode"])["roles"]
+                    data = bytearray(len(roles))
+                    for i, role in enumerate(roles):
+                        if role in ("dim", "dim_f", "shutter"):
+                            data[i] = 255
+                        elif role == "gc":
+                            data[i] = 128
+                    data = bytes(data)
                 wt = self.white_test
                 if wt and effective_variant(fx) == "RGBW" and fx["mode"] == fixtures.SAVE_MODE:
                     data = white_test_bytes(wt["method"], wt["k"], wt.get("mix"))

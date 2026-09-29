@@ -209,7 +209,7 @@ class IntegrationTests(unittest.TestCase):
             if self.api.call("GET", "/api/status")["engine"]["job"]["state"] == "done":
                 break
             time.sleep(0.1)
-        self.assertIn((3, 0), seen)   # "show saved" while live look blacked out
+        self.assertIn((3, 255), seen)   # "show saved", colours off but dimmer full so the saved look can show
         self.api.call("POST", "/api/output", {"action": "release"})
 
 
