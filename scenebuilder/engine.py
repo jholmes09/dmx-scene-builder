@@ -64,6 +64,8 @@ class Engine:
     # ------------------------------------------------------------ output control
     def set_active(self, fid: Optional[str], output: bool = True, keep_hold: bool = False):
         with self.lock:
+            self._release_token = None  # going live cancels a Release that's still sending black
+            self._releasing = False
             self.active_float = fid
             self.flash.clear()
             self.special.clear()
@@ -81,19 +83,47 @@ class Engine:
                 self.ctl.clear_targets()
         self.refresh()
 
-    def release(self):
-        """Stop sending entirely (the box falls back to DMX Hold or its stored look)."""
+    def release(self, to_black: bool = True):
+        """Release like a console: send black for ~1 s, then stop sending. The boxes' DMX Hold then
+        keeps the lights dark (rather than frozen on the last look)."""
         with self.lock:
             self._resume_after_rdm = False
             self.hold = False
             self.white_test = None
-            self.ctl.output_enabled = False
-            self.ctl.clear_targets()
             if self.job and self.job.get("state") == "running":
                 self.job["abort"] = "Release was pressed"
+            was_on = self.ctl.output_enabled
+            if not (to_black and was_on):
+                self.ctl.output_enabled = False
+                self.ctl.clear_targets()
+                return
+            zeros = {t: bytes(512) for t in self.frames_targets()}
+            self.ctl.set_targets(zeros)
+            self._release_token = token = object()
+            self._releasing = True
+
+        def finish():
+            time.sleep(1.0)  # ~30 black frames
+            with self.lock:
+                if getattr(self, "_release_token", None) is token:  # nobody went live again meanwhile
+                    self.ctl.output_enabled = False
+                    self.ctl.clear_targets()
+                    self._releasing = False
+        threading.Thread(target=finish, daemon=True).start()
+
+    def frames_targets(self):
+        """The (ip, port, port-address) of every box on the active float."""
+        with self.store.lock:
+            fl = self.store.get_float(self.active_float) if self.active_float else None
+            if not fl:
+                return []
+            return [(b["ip"], int(b.get("udp_port") or 6454), (b["net"] << 8) | (b["subnet"] << 4) | b["universe"])
+                    for b in fl["boxes"] if b.get("ip")]
 
     def resume(self):
         with self.lock:
+            self._release_token = None
+            self._releasing = False
             if self.active_float:
                 if self._paused_for_rdm:
                     self._resume_after_rdm = True
@@ -109,7 +139,8 @@ class Engine:
 
     def status(self) -> dict:
         with self.lock:
-            return {"active_float": self.active_float, "output": self.ctl.output_enabled,
+            return {"active_float": self.active_float,
+                    "output": self.ctl.output_enabled and not getattr(self, "_releasing", False),
                     "blackout": self.blackout, "flashing": list(self.flash.keys()),
                     "job": dict(self.job) if self.job else None,
                     "sweep": {k: v for k, v in self.sweep.items() if k != "target"} if self.sweep else None,
@@ -189,6 +220,8 @@ class Engine:
             return {k: bytes(v) for k, v in out.items()}
 
     def refresh(self):
+        if getattr(self, "_releasing", False):
+            return  # sending black for Release; don't put the look back
         self.ctl.set_targets(self.frames())
         if self.ctl.output_enabled:
             self.ctl.send_now()
@@ -199,7 +232,7 @@ class Engine:
             try:
                 with self.lock:
                     need = bool(self.flash) or bool(self.special) or bool(self.sweep)
-                if need and self.ctl.output_enabled:
+                if need and self.ctl.output_enabled and not getattr(self, "_releasing", False):
                     self.ctl.set_targets(self.frames())
             except Exception:
                 logging.getLogger("scenebuilder.engine").exception("engine loop")

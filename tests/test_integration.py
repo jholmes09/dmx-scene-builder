@@ -151,8 +151,9 @@ class IntegrationTests(unittest.TestCase):
         with urllib.request.urlopen(self.api.base + "/patch/" + fl["id"]) as r:
             self.assertIn(b"TW 0", r.read())
 
-        # Release stops output
+        # Release sends black for ~1 s, then stops output
         self.api.call("POST", "/api/output", {"action": "release"})
+        time.sleep(1.4)
         n = self.sim.dmx_frames
         time.sleep(0.4)
         self.assertLessEqual(self.sim.dmx_frames - n, 1)
@@ -374,3 +375,29 @@ class PutKeepsServerStateTests(IntegrationTests):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReleaseToBlackTests(IntegrationTests):
+    def test_01_static_and_state(self): pass
+    def test_02_discover(self): pass
+    def test_03_scan_fix_patch_and_drive(self): pass
+    def test_04_autopatch_and_problems(self): pass
+    def test_05_validation(self): pass
+    def test_06_sweep(self): pass
+    def test_07_verify_blacks_out_then_shows_saved(self): pass
+
+    def test_30_release_sends_black_then_stops(self):
+        fl = self.make_float()
+        box = fl["boxes"][0]["id"]
+        fl["fixtures"] = [{"id": "a", "label": "A", "variant": "TW", "mode": 11, "box_id": box, "address": 1}]
+        self.api.call("PUT", "/api/floats/" + fl["id"], fl)
+        self.api.call("POST", "/api/output", {"action": "activate", "float_id": fl["id"]})
+        self.api.call("POST", "/api/floats/%s/live" % fl["id"], {"changes": {"a": {"dim": 1.0}}})
+        self.assertTrue(wait_for(lambda: self.sim.last_dmx[1] == 255))
+        self.api.call("POST", "/api/output", {"action": "release"})
+        self.assertTrue(wait_for(lambda: self.sim.last_dmx[:3] == bytes(3), 2))   # black reached the box
+        time.sleep(1.4)
+        n = self.sim.dmx_frames
+        time.sleep(0.4)
+        self.assertLessEqual(self.sim.dmx_frames - n, 1)                          # then it stopped sending
+        self.assertEqual(self.sim.last_dmx[:3], bytes(3))                         # and the last thing sent was black

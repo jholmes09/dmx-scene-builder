@@ -1448,7 +1448,7 @@ async function boot() {
     const r = await api("POST", "/api/output", { action: (S.engine.hold || S.engine.output) ? "release" : "resume" });
     S.engine = r.engine; renderStatus(); renderRail(); renderFloatHead();
     if (wasHold) toast("Hold cleared. Press Go live to send your look again.", "ok");
-    else if (wasLive) toast("Stopped sending. The box keeps the last look (DMX Hold). Use Blackout to go dark.");
+    else if (wasLive) toast("Released: lights sent to black.");
     if (!S.engine.output && !S.engine.active_float) toast("Pick a float and press Go live");
   };
   $("#blackoutBtn").onclick = async () => {
