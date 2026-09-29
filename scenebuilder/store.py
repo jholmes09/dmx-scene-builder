@@ -306,6 +306,10 @@ class Store:
                             self.data["floats"][i] = fl
                             break
                     replaced += 1
+            theirs_cal = (incoming.get("white_cal") or {}).get("RGBW") or {}
+            mine_cal = self.data.setdefault("white_cal", {}).setdefault("RGBW", {})
+            for kk, mix in theirs_cal.items():
+                mine_cal.setdefault(kk, mix)
             existing = {c.get("id") for c in self.data.get("palette", [])}
             for c in incoming.get("palette", []):
                 if c.get("id") not in existing:  # by id: the other computer's own "Warm" is kept too

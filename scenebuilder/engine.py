@@ -17,7 +17,7 @@ SETTLE_S = 1.5
 VCW_WHITES = {1800: 1, 2700: 3, 3200: 5, 4200: 7, 5600: 9, 6500: 11}  # Mode 7 virtual colour wheel presets
 
 
-def white_test_bytes(method: int, k: int) -> bytes:
+def white_test_bytes(method: int, k: int, mix=None) -> bytes:
     """Mode 7 frame for comparing white methods on RGB + cool-white Calumma (dimmer ~60%)."""
     ctc = fixtures.kelvin_to_ctc(k)
     r = g = b = w = 0
@@ -34,6 +34,9 @@ def white_test_bytes(method: int, k: int) -> bytes:
         ctc = 0
     elif method == 5:          # white LED + CTC
         w = 255
+    elif method == 6 and mix:  # tune by eye
+        r, g, b, w = (int(round(max(0.0, min(1.0, x)) * 255)) for x in mix)
+        ctc = 0
     # special r rf g gf b bf w wf gc ctc vcw shutter dim dimf
     return bytes([0, r, 0, g, 0, b, 0, w, 0, 128, ctc, vcw, 255, 153, 0])
 
@@ -128,6 +131,7 @@ class Engine:
             if self.hold:
                 return {k: bytes(v) for k, v in out.items()}
             now = time.monotonic()
+            cal = (self.store.data.get("white_cal") or {}).get("RGBW")
             specials = []  # (buffer, index, value): Mode 7 Special-functions bytes, written last
             for fx in fl["fixtures"]:
                 b = boxes.get(fx.get("box_id"))
@@ -144,12 +148,13 @@ class Engine:
                     else:
                         state = {"dim": 1.0 if int(now * 3) % 2 == 0 else 0.0, "kind": "white", "cct": 4000}
                 try:
-                    data = fixtures.render(effective_variant(fx), fx["mode"], state, self.special.get(fx["id"], 0))
+                    data = fixtures.render(effective_variant(fx), fx["mode"], state, self.special.get(fx["id"], 0),
+                                           cal if effective_variant(fx) == "RGBW" else None)
                 except ValueError:
                     continue
                 wt = self.white_test
                 if wt and effective_variant(fx) == "RGBW" and fx["mode"] == fixtures.SAVE_MODE:
-                    data = white_test_bytes(wt["method"], wt["k"])
+                    data = white_test_bytes(wt["method"], wt["k"], wt.get("mix"))
                 a = fx["address"] - 1
                 buf = out[key]
                 buf[a:a + len(data)] = data[:512 - a]
@@ -208,11 +213,11 @@ class Engine:
             self.flash[fx_id] = time.monotonic() + seconds
         self.refresh()
 
-    def set_white_test(self, method: Optional[int], k: int = 6500):
+    def set_white_test(self, method: Optional[int], k: int = 6500, mix=None):
         with self.lock:
             if method and self.job and self.job.get("state") == "running":
                 raise RuntimeError("A save is running. Wait for it to finish.")
-            self.white_test = {"method": int(method), "k": int(k)} if method else None
+            self.white_test = {"method": int(method), "k": int(k), "mix": mix} if method else None
         self.refresh()
 
     def set_blackout(self, on: bool):

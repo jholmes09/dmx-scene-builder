@@ -1310,23 +1310,44 @@ async function chooseFolder(start) {
 }
 
 function whiteTest() {
-  // Temporary: step every Mode 7 RGBW light on the live float through ways of making white.
+  // Step every Mode 7 RGBW light on the live float through ways of making white, and tune cool whites by eye.
   const fl = curFloat();
   if (!fl || !isLive(fl)) { toast("Go live on a float with Mode 7 RGBW lights first.", "bad"); return; }
   let method = 1, k = 6500;
+  const seed = { 4200: [1, 0.9, 0.55, 1], 5600: [0.8, 0.95, 0.75, 1], 6500: [0.75, 1, 0.9, 1] };
+  const cal = () => ((S.project.white_cal || {}).RGBW) || {};
+  let mix = (cal()[k] || seed[k] || [0.75, 1, 0.9, 1]).slice();
   const names = { 1: "All colors + color temp channel (current)", 2: "Fixture's built-in white preset", 3: "Cool white LED only",
-    4: "All colors full, no correction", 5: "Cool white LED + color temp channel" };
+    4: "All colors full, no correction", 5: "Cool white LED + color temp channel", 6: "Tune by eye" };
   const body = h("div");
-  const send = async () => { try { await api("POST", "/api/output", { action: "white_test", method, k }); } catch (e) { toast(e.message, "bad"); } draw(); };
+  let tmr = null;
+  const send = (redraw = true) => {
+    clearTimeout(tmr);
+    tmr = setTimeout(async () => { try { await api("POST", "/api/output", { action: "white_test", method, k, mix }); } catch (e) { toast(e.message, "bad"); } }, 40);
+    if (redraw) draw();
+  };
+  const pickK = (x) => { k = x; if (method === 6) mix = (cal()[k] || seed[k] || mix).slice(); send(); };
   const draw = () => {
     body.innerHTML = "";
     body.append(
       h("div", { class: "kicker small" }, "Method"),
-      h("div", { class: "seg", style: { margin: "6px 0 4px" } }, [1, 2, 3, 4, 5].map(n => h("button", { class: n === method ? "on" : "", onclick: () => { method = n; send(); } }, String(n)))),
+      h("div", { class: "seg", style: { margin: "6px 0 4px" } }, [1, 2, 3, 4, 5, 6].map(n => h("button", { class: n === method ? "on" : "", onclick: () => { method = n; if (n === 6) mix = (cal()[k] || seed[k] || mix).slice(); send(); } }, String(n)))),
       h("p", { style: { margin: "4px 0 14px", fontWeight: 600 } }, method + ": " + names[method]),
       h("div", { class: "kicker small" }, "Color temperature"),
-      h("div", { class: "seg", style: { marginTop: "6px" } }, [2700, 3200, 4200, 5600, 6500].map(x => h("button", { class: x === k ? "on" : "", onclick: () => { k = x; send(); } }, x + "K"))),
-      h("p", { class: "hint" }, "Every Mode 7 RGBW light on this float shows it. Method 3 ignores the color temperature."));
+      h("div", { class: "seg", style: { marginTop: "6px" } }, [2700, 3200, 4200, 5600, 6500].map(x => h("button", { class: x === k ? "on" : "", onclick: () => pickK(x) }, x + "K" + (cal()[x] ? " ✓" : "")))));
+    if (method === 6) {
+      ["Red", "Green", "Blue", "White"].forEach((name, i) => body.append(sliderCtl({
+        label: name, min: 0, max: 100, step: 1, value: Math.round(mix[i] * 100), mixed: false, fmt: v => v + "%",
+        track: ["linear-gradient(90deg,#000,#f33)", "linear-gradient(90deg,#000,#3f5)", "linear-gradient(90deg,#000,#48f)", "linear-gradient(90deg,#000,#fff)"][i],
+        onInput: v => { mix[i] = v / 100; send(false); } })));
+      body.append(h("div", { class: "btn-row", style: { marginTop: "12px" } },
+        h("button", { class: "btn gold", onclick: async () => {
+          try { const r = await api("POST", "/api/white_cal", { k, mix }); S.project.white_cal = r.white_cal; toast(`Saved. RGBW lights now use this at ${k}K`, "ok"); draw(); }
+          catch (e) { toast(e.message, "bad"); } } }, `Save as ${k}K`),
+        cal()[k] ? h("button", { class: "btn small ghost", onclick: async () => {
+          const r = await api("POST", "/api/white_cal", { k, delete: true }); S.project.white_cal = r.white_cal; toast(`Back to the fixture's own ${k}K`); draw(); } }, `Remove ${k}K`) : null));
+      body.append(h("p", { class: "hint" }, "Saved temperatures (✓) replace the fixture's own white at that temperature and above, blending in between. Warmer than your coolest saved one, the fixture's own white is used."));
+    } else body.append(h("p", { class: "hint" }, "Every Mode 7 RGBW light on this float shows it. Methods 3 and 4 ignore the color temperature."));
   };
   send();
   modal("White test", body, [{ label: "Stop test", fn: async () => { await api("POST", "/api/output", { action: "white_test", method: null }); } }]);

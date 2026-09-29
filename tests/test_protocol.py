@@ -157,3 +157,25 @@ class FixtureRenderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TunedWhiteTests(unittest.TestCase):
+    CAL = {"5600": [0.6, 0.8, 0.6, 1.0], "6500": [0.8, 1.0, 0.9, 1.0]}
+
+    def test_below_coolest_uses_fixture_ctc(self):
+        d = fixtures.render("RGBW", 7, {"dim": 1, "kind": "white", "cct": 3200}, cal=self.CAL)
+        v = dict(zip(fixtures.mode_info("RGBW", 7)["roles"], d))
+        self.assertEqual(v["ctc"], 91)
+
+    def test_tuned_point_used_exactly(self):
+        d = fixtures.render("RGBW", 7, {"dim": 1, "kind": "white", "cct": 6500}, cal=self.CAL)
+        v = dict(zip(fixtures.mode_info("RGBW", 7)["roles"], d))
+        self.assertEqual((v["ctc"], v["r"], v["g"], v["w"]), (0, 204, 255, 255))
+
+    def test_blends_between_tuned_points(self):
+        mix = fixtures.tuned_mix(self.CAL, 6050)
+        self.assertAlmostEqual(mix[0], 0.7, places=3)
+
+    def test_mode1_uses_tuned_mix_too(self):
+        d = fixtures.render("RGBW", 1, {"dim": 1, "kind": "white", "cct": 6500}, cal=self.CAL)
+        self.assertEqual(list(d), [204, 255, 230, 255])

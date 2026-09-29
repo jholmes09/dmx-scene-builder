@@ -452,12 +452,29 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "blackout":
                 eng.set_blackout(b.get("on", True))
             elif action == "white_test":
-                eng.set_white_test(b.get("method"), int(b.get("k") or 6500))
+                eng.set_white_test(b.get("method"), int(b.get("k") or 6500), b.get("mix"))
             elif action == "hold":
                 eng.set_hold(bool(b.get("on", True)))
             else:
                 raise ValueError("unknown action")
             return self._json({"engine": eng.status()})
+        if p == ["white_cal"] and method == "POST":
+            b = self._body()
+            k = int(b["k"])
+            if not 1800 <= k <= 10000:
+                raise ValueError("Color temperature must be 1800-10000K.")
+            with store.lock:
+                cal = store.data.setdefault("white_cal", {}).setdefault("RGBW", {})
+                if b.get("delete"):
+                    cal.pop(str(k), None)
+                else:
+                    mix = [max(0.0, min(1.0, float(x))) for x in b["mix"]]
+                    if len(mix) != 4:
+                        raise ValueError("mix must be [r, g, b, w]")
+                    cal[str(k)] = mix
+                store.bump()
+            eng.refresh()
+            return self._json({"white_cal": store.data["white_cal"]})
         if p and p[0] == "palette":
             return self._palette(method, p[1:])
         if p == ["project"] and method == "GET":

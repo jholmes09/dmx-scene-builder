@@ -15,7 +15,7 @@ A fixture's *state* (what the UI edits) is a dict:
 from __future__ import annotations
 
 import colorsys
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # ---------------------------------------------------------------- channel roles
 # special  Special functions (save initial values etc.), 0 = no function
@@ -136,7 +136,22 @@ def normalize_state(state: dict, variant: str) -> dict:
     return s
 
 
-def role_values(variant: str, mode: int, state: dict, special: int = 0) -> Dict[str, float]:
+def tuned_mix(cal: dict, k: float):
+    """Eye-tuned RGBW white: cal = {"6500": [r, g, b, w], ...} (0..1). Returns (r, g, b, w) for k,
+    blending between tuned temperatures, or None when k is warmer than every tuned one."""
+    pts = sorted((int(kk), v) for kk, v in (cal or {}).items() if isinstance(v, (list, tuple)) and len(v) == 4)
+    if not pts or k < pts[0][0]:
+        return None
+    if k >= pts[-1][0]:
+        return tuple(pts[-1][1])
+    for (k0, a), (k1, b) in zip(pts, pts[1:]):
+        if k0 <= k <= k1:
+            t = (k - k0) / float(k1 - k0)
+            return tuple(a[i] + (b[i] - a[i]) * t for i in range(4))
+    return None
+
+
+def role_values(variant: str, mode: int, state: dict, special: int = 0, cal: Optional[dict] = None) -> Dict[str, float]:
     """Compute a 0..1 (or raw byte for special/gc/ctc/vcw/shutter/wsel) value for every role."""
     s = normalize_state(state, variant)
     roles = mode_info(variant, mode)["roles"]
@@ -151,7 +166,12 @@ def role_values(variant: str, mode: int, state: dict, special: int = 0) -> Dict[
             w = s["white"]
             ctc_byte = 0
         else:  # white
-            if has_ctc:
+            mix = tuned_mix(cal, s["cct"]) if ("w" in roles) else None
+            if mix:
+                # Cool whites tuned by eye (the fixture's own calibration is pink at the cool end).
+                r, g, b, w = (max(0.0, min(1.0, float(x))) for x in mix)
+                ctc_byte = 0
+            elif has_ctc:
                 # Calibrated white: all emitters full, CTC picks the calibrated colour temperature.
                 r = g = b = w = 1.0
                 ctc_byte = kelvin_to_ctc(s["cct"])
@@ -180,10 +200,10 @@ def role_values(variant: str, mode: int, state: dict, special: int = 0) -> Dict[
     return vals
 
 
-def render(variant: str, mode: int, state: dict, special: int = 0) -> bytes:
-    """Return the fixture's DMX footprint bytes for a state."""
+def render(variant: str, mode: int, state: dict, special: int = 0, cal: Optional[dict] = None) -> bytes:
+    """Return the fixture's DMX footprint bytes for a state. `cal` = eye-tuned RGBW whites."""
     roles = mode_info(variant, mode)["roles"]
-    v = role_values(variant, mode, state, special)
+    v = role_values(variant, mode, state, special, cal)
     out = []
     i = 0
     while i < len(roles):
