@@ -1350,7 +1350,11 @@ function whiteTest() {
     } else body.append(h("p", { class: "hint" }, "Every Mode 7 RGBW light on this float shows it. Methods 3 and 4 ignore the color temperature."));
   };
   send();
-  modal("White test", body, [{ label: "Stop test", fn: async () => { await api("POST", "/api/output", { action: "white_test", method: null }); } }]);
+  modal("White test", body, [
+    { label: "Reset to fixture whites", fn: async () => {
+      const r = await api("POST", "/api/white_cal", { reset_all: true }); S.project.white_cal = r.white_cal;
+      await api("POST", "/api/output", { action: "white_test", method: null }); toast("All whites back to the fixture's own", "ok"); } },
+    { label: "Stop test", fn: async () => { await api("POST", "/api/output", { action: "white_test", method: null }); } }]);
 }
 
 function networkPicker(net, ifs) {

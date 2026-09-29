@@ -460,12 +460,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"engine": eng.status()})
         if p == ["white_cal"] and method == "POST":
             b = self._body()
-            k = int(b["k"])
+            k = int(b.get("k") or 6500)
             if not 1800 <= k <= 10000:
                 raise ValueError("Color temperature must be 1800-10000K.")
             with store.lock:
                 cal = store.data.setdefault("white_cal", {}).setdefault("RGBW", {})
-                if b.get("delete"):
+                if b.get("reset_all"):
+                    cal.clear()
+                elif b.get("delete"):
                     cal.pop(str(k), None)
                 else:
                     mix = [max(0.0, min(1.0, float(x))) for x in b["mix"]]
