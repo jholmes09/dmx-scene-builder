@@ -14,6 +14,9 @@ themselves so the float can run with nothing connected at the parade.
 Python before, install it from python.org first (check "Add python.exe to
 PATH" during install), then double-click the .bat file again.
 
+On Windows, the first run may show a Windows Firewall prompt for Python. Tick
+**Private networks** and click Allow, or the iPad and the lights can't reach it.
+
 Either way, a window opens and prints an address, something like
 `http://jeffs-laptop.local:8080`. On the iPad, open that address in Safari.
 

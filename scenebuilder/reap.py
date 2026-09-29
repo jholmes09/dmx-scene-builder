@@ -85,7 +85,7 @@ class Reap:
             return False
 
     # ------------------------------------------------------------ RDM through the box
-    def discover(self, timeout: float = 40.0) -> List[dict]:
+    def discover(self, timeout: float = 25.0) -> List[dict]:
         self._post("rdm_test")
         found: Dict[str, dict] = {}
         deadline = time.monotonic() + timeout
@@ -98,12 +98,13 @@ class Reap:
             time.sleep(0.2)
         raise ReapError("The box's device search didn't finish within %d s." % timeout)
 
-    def _wait_setup(self, timeout: float = 15.0) -> dict:
+    def _wait_setup(self, d_uid: str, timeout: float = 15.0) -> dict:
+        """Wait for the box to confirm a change to *this* light (ignore leftovers for others)."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             time.sleep(0.25)
             r = self._post("ds_get_setup")
-            if r.get("d_uid"):
+            if r.get("d_uid") and str(r["d_uid"]).lower() == d_uid.lower():
                 return r
         raise ReapError("The fixture didn't confirm the change within %d s." % timeout)
 
@@ -128,13 +129,13 @@ class Reap:
         r = self._post("ds_setup_device", data)
         if r.get("status", 0) != 0:
             raise ReapError("The box refused the setting (status %s)." % r.get("status"))
-        done = self._wait_setup()
+        done = self._wait_setup(d_uid)
         if done.get("err", 0) != 0:
             raise ReapError("The fixture rejected the setting (error %s)." % done.get("err"))
 
     def identify(self, d_uid: str, on: bool) -> None:
         self._post("rdm_identify", {"uid": d_uid, "i_v": 1 if on else 0})
-        self._wait_setup()
+        self._wait_setup(d_uid)
 
     # ------------------------------------------------------------ box settings
     def other_settings(self) -> dict:
@@ -150,8 +151,8 @@ class Reap:
             "ic_od": 1 if (cur.get("ic_od") == "enabled" if output_data is None else output_data) else 0,
         }
         r = self._post("oth_s", data)
-        if r.get("status", 0) != 0:
-            raise ReapError("The box refused the setting (status %s)." % r.get("status"))
+        if r.get("status") != 0:
+            raise ReapError("The box didn't confirm the setting (status %s)." % r.get("status"))
 
     def restart(self) -> None:
         try:

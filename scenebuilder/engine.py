@@ -40,6 +40,7 @@ class Engine:
             self.special.clear()
             self.dark.clear()
             self.sweep = None
+            self.hold = False
             want = bool(fid) and output
             if self._paused_for_rdm:
                 self._resume_after_rdm = want
@@ -53,6 +54,7 @@ class Engine:
         """Stop sending entirely (the box falls back to DMX Hold or its stored look)."""
         with self.lock:
             self._resume_after_rdm = False
+            self.hold = False
             self.ctl.output_enabled = False
             self.ctl.clear_targets()
             if self.job and self.job.get("state") == "running":
@@ -132,8 +134,9 @@ class Engine:
                     out[sw["target"]][a:a + len(data)] = data[:512 - a]
             # A neighbour's overlapping bytes must never land on a Mode 7 Special channel
             # (1-2 = save, 5-6 = factory demo at power-on).
+            dark_all = self.blackout or bool(sw)
             for buf, i, v in specials:
-                buf[i] = v
+                buf[i] = 0 if dark_all else v
             return {k: bytes(v) for k, v in out.items()}
 
     def refresh(self):
@@ -175,10 +178,12 @@ class Engine:
         self.refresh()
 
     def set_blackout(self, on: bool):
-        self.blackout = bool(on)
+        with self.lock:
+            if on and self.job and self.job.get("state") == "running":
+                raise RuntimeError("A save is running. Wait for it to finish.")
+            self.blackout = bool(on)
         self.refresh()
 
-    # ------------------------------------------------------------ save-to-fixtures job
     def start_save(self, fid: str, fx_ids, verify_only: bool = False) -> dict:
         with self.lock:
             if self.job and self.job.get("state") == "running":
@@ -266,6 +271,9 @@ class Engine:
     # ------------------------------------------------------------ address finder (no RDM needed)
     def start_sweep(self, fid: str, box_id: str, variant: str, mode: int, start: int = 1,
                     count: int = 20, seconds: float = 2.5) -> dict:
+        with self.lock:
+            if self.job and self.job.get("state") == "running":
+                raise RuntimeError("A save is running. Wait for it to finish.")
         with self.store.lock:
             fl = self.store.get_float(fid)
             if not fl:

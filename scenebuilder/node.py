@@ -104,7 +104,7 @@ def _windows_interfaces() -> List[dict]:
     """IPv4 interfaces from `ipconfig /all`. Each: name, ip, netmask, broadcast."""
     try:
         # cp437/oem encoding varies by locale; decode leniently rather than raise.
-        raw = subprocess.run(["ipconfig", "/all"], capture_output=True, timeout=3).stdout
+        raw = subprocess.run(["ipconfig", "/all"], capture_output=True, timeout=10).stdout
         text = raw.decode("oem", "replace") if isinstance(raw, bytes) else raw
     except Exception:
         return []
@@ -148,7 +148,11 @@ class ArtNetController:
     def start(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         # No SO_REUSEPORT: if another Art-Net app holds 6454 we want to know, not silently lose replies.
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # On Windows SO_REUSEADDR would let a second copy (or xLights) bind the same port silently.
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         try:
             s.bind((self.bind_ip, self.port))

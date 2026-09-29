@@ -114,3 +114,18 @@ class StampAndBackupTests(unittest.TestCase):
         self.store.flush()
         self.assertIn("not found", self.store.mirror_error or "")
         self.assertTrue(self.store.path.exists())      # main save still happened
+
+
+class FolderPickerTests(unittest.TestCase):
+    def test_places_and_listing(self):
+        from scenebuilder.server import list_folders
+        top = list_folders("")
+        self.assertIsNone(top["path"])
+        self.assertTrue(all("path" in p for p in top["places"]))
+        home = list_folders(str(Path.home()))
+        self.assertEqual(home["path"], str(Path.home().resolve()))
+
+    def test_outside_home_refused(self):
+        from scenebuilder.server import list_folders
+        with self.assertRaises(ValueError):
+            list_folders("/etc")

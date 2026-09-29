@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import platform
 import os
 import logging
 import mimetypes
@@ -63,7 +64,8 @@ class App:
 
         class _S:
             def __enter__(self_):
-                app.scan_lock.acquire()
+                if not app.scan_lock.acquire(timeout=3):
+                    raise RuntimeError("Busy talking to the box. Try again in a moment.")
                 try:
                     if app.pause_during_rdm:
                         app.engine.pause_for_rdm()
@@ -215,21 +217,73 @@ def mode_from_description(index: int, d: dict):
     return None
 
 
-def reap_variant(mode: int) -> str:
+def cloud_folders() -> list:
+    """Likely backup destinations on whichever computer runs the app (Mac or Windows)."""
+    home = Path.home()
+    cands = [("Dropbox", home / "Dropbox")]
+    cs = home / "Library" / "CloudStorage"  # macOS: Dropbox, OneDrive, Google Drive live here
+    if cs.is_dir():
+        for d in sorted(cs.iterdir()):
+            if d.is_dir():
+                cands.append((d.name.split("-")[0].replace("GoogleDrive", "Google Drive"), d))
+    cands += [("iCloud Drive", home / "Library" / "Mobile Documents" / "com~apple~CloudDocs"),
+              ("iCloud Drive", home / "iCloudDrive"),
+              ("OneDrive", Path(os.environ["OneDrive"]) if os.environ.get("OneDrive") else home / "OneDrive"),
+              ("Google Drive", home / "Google Drive"), ("Google Drive", Path("G:/My Drive")),
+              ("Documents", home / "Documents"), ("Desktop", home / "Desktop")]
+    out, seen, names = [], set(), {}
+    for name, path in cands:
+        try:
+            if not path.is_dir():
+                continue
+            real = str(path.resolve())
+        except OSError:
+            continue
+        if real in seen:
+            continue  # same folder reached two ways (e.g. ~/Dropbox -> CloudStorage/Dropbox)
+        seen.add(real)
+        names[name] = names.get(name, 0) + 1
+        label = name if names[name] == 1 else "%s (%s)" % (name, path.name)
+        out.append({"name": label, "path": str(path)})
+    return out
+
+
+def list_folders(path: str) -> dict:
+    """Subfolders of `path` (inside the user's home, or a cloud drive letter on Windows), for the folder picker."""
+    if not path:
+        return {"path": None, "parent": None, "folders": [], "places": cloud_folders()}
+    p = Path(os.path.expanduser(path)).resolve()
+    allowed = [Path.home().resolve()] + [Path(c["path"]).resolve() for c in cloud_folders()]
+    if not any(p == a or a in p.parents for a in allowed):
+        raise ValueError("Pick a folder inside your home folder or a cloud drive.")
+    if not p.is_dir():
+        raise ValueError("That folder doesn't exist: %s" % p)
+    try:
+        subs = sorted((c for c in p.iterdir() if c.is_dir() and not c.name.startswith(".")), key=lambda c: c.name.lower())
+    except OSError as e:
+        raise ValueError("Can't open that folder: %s" % e)
+    parent = p.parent if any(p.parent == a or a in p.parent.parents for a in allowed) else None
+    return {"path": str(p), "parent": str(parent) if parent else None,
+            "folders": [{"name": c.name, "path": str(c)} for c in subs[:300]], "places": cloud_folders()}
+
+
+def reap_variant(mode: int):
     if mode in (11, 12):
         return "TW"
     if mode == 13:
         return "PW"
+    if mode == fixtures.SAVE_MODE:
+        return None  # Mode 7 exists on RGBW and (possibly) tunable white: keep the patch's type
     return "RGBW"
 
 
 def reap_scan_entry(d: dict) -> dict:
     mode = int(d.get("dmx_p") or 1)
     variant = reap_variant(mode)
-    avail = sorted(fixtures.MODES[variant]) + ([fixtures.SAVE_MODE] if variant != "RGBW" else [])
+    avail = sorted(fixtures.MODES[variant or "RGBW"]) + ([fixtures.SAVE_MODE] if variant not in ("RGBW", None) else [])
     fp = None
     try:
-        fp = fixtures.footprint(variant if mode in fixtures.MODES[variant] else "RGBW", mode)
+        fp = fixtures.footprint(variant if variant and mode in fixtures.MODES[variant] else "RGBW", mode)
     except ValueError:
         pass
     return {"uid": reap_uid_str(d["d_uid"]), "ok": True, "address": int(d.get("dmx_a", 0)) + 1, "mode": mode,
@@ -369,6 +423,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 app.sim_off()
             return self._json({"sim": app.sim.state() if app.sim else None})
+        if p == ["folders"] and method == "GET":
+            return self._json(list_folders((q.get("path") or [""])[0]))
         if p == ["settings"] and method == "GET":
             return self._json(self._settings_view())
         if p == ["settings"] and method == "POST":
@@ -405,6 +461,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == ["project"] and method == "GET":
             return self._json(store.snapshot())
         if p == ["project"] and method == "PUT":
+            eng.set_active(None)
             store.replace_project(self._body())
             eng.refresh()
             return self._json({"ok": True})
@@ -412,6 +469,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(store.plan_merge(self._body()))
         if p == ["project", "merge_apply"] and method == "POST":
             b = self._body()
+            if eng.active_float and (b.get("resolutions") or {}).get(eng.active_float) == "theirs":
+                eng.release()  # the other computer's patch may not match these lights
             res = store.apply_merge(b.get("incoming") or {}, b.get("resolutions") or {})
             eng.refresh()
             return self._json(res)
@@ -511,8 +570,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(res)
             if rest == ["save_rdm"] and method == "POST":
                 return self._json(self._save_rdm(fl, self._body().get("box_ids")))
+            if rest == ["apply"] and method == "POST":
+                return self._json(self._apply_to_lights(fl, self._body()))
             if rest == ["save"] and method == "POST":
                 b = self._body()
+                for box in fl["boxes"]:  # a box on "Play saved look" ignores the app: saving would do nothing
+                    if box.get("ip") and not b.get("verify"):
+                        reap = Reap(box["ip"])
+                        if reap.available() and reap.other_settings().get("ic_od") == "disabled":
+                            raise RuntimeError("%s is on 'Play saved look'. Switch it back to app control first." % box["name"])
                 return self._json(eng.start_save(fid, b.get("fixture_ids", []), bool(b.get("verify"))))
         raise KeyError("no such endpoint")
 
@@ -610,6 +676,14 @@ class Handler(BaseHTTPRequestHandler):
         reap = Reap(ip)
         act = b["action"]
         d_uid = reap_uid(b["uid"])
+        if act in ("address", "mode", "label", "set_param"):
+            # Every box write resends address, mode and label together: use the light's current
+            # values, not what we saw at the last Scan (someone may have changed it since).
+            fresh = {reap_uid_str(d["d_uid"]): d for d in reap.discover(timeout=20)}
+            app.reap_devices.setdefault(ip, {}).update(fresh)
+            if b["uid"] not in fresh:
+                raise ValueError("That light didn't answer the box's search. Try again.")
+            dev = fresh[b["uid"]]
         label = (dev.get("u_l") or "").strip()
         addr, mode = int(dev.get("dmx_a", 0)) + 1, int(dev.get("dmx_p") or 1)
         with app.rdm_session():
@@ -665,6 +739,71 @@ class Handler(BaseHTTPRequestHandler):
         info = {"address": int(dev.get("dmx_a", 0)) + 1, "mode": int(dev.get("dmx_p") or 1),
                 "personality": int(dev.get("dmx_p") or 1)}
         return self._json({"ok": True, "uid": b["uid"], "info": info, "rev": app.store.data.get("rev", 0)})
+
+    def _apply_to_lights(self, fl, b):
+        """Write modes/addresses to the real lights, safely, from the Mac.
+
+        body: {"to_mode7": [fixture ids]}  or  {"push": true} (write the patch as it stands).
+        Output goes live on this float and is held at zero first, so no light ever reads a stale
+        byte on its save channel while layouts change. The store only records a light's new
+        mode/address after that light confirms it. On any failure the hold stays on."""
+        app, eng, store = self.app, self.app.engine, self.app.store
+        with store.lock:
+            fxs = [fx for fx in fl["fixtures"] if fx.get("uid") and fx.get("address")]
+            if b.get("to_mode7"):
+                ids = set(b["to_mode7"])
+                chosen = [fx for fx in fxs if fx["id"] in ids]
+                targets = {}
+                for box_id in {fx["box_id"] for fx in chosen}:
+                    plan = plan_addresses(fl, box_id, 1, [fx["id"] for fx in chosen if fx["box_id"] == box_id],
+                                          modes={fx["id"]: fixtures.SAVE_MODE for fx in chosen})
+                    targets.update({fid: (addr, fixtures.SAVE_MODE) for fid, addr in plan.items()})
+            else:
+                targets = {fx["id"]: (fx["address"], fx["mode"]) for fx in fxs}
+            by_id = {fx["id"]: fx for fx in fl["fixtures"]}
+        if not targets:
+            raise ValueError("No lights to change. Scan the box first so the app knows which light is which.")
+        if not app.scan_lock.acquire(timeout=3):
+            raise RuntimeError("Busy talking to the box. Try again in a moment.")
+        done, errors = [], []
+        try:
+            eng.set_active(fl["id"], output=True)
+            eng.set_hold(True)
+            time.sleep(0.4)  # let a few all-zero frames reach the box
+            for box in fl["boxes"]:
+                mine = [fid for fid in targets if by_id[fid].get("box_id") == box["id"]]
+                if not mine or not box.get("ip"):
+                    continue
+                reap = Reap(box["ip"])
+                if not reap.available():
+                    errors.append("%s: the box's web page didn't answer." % box["name"])
+                    continue
+                cache = app.reap_devices.setdefault(box["ip"], {})
+                cache.update({reap_uid_str(d["d_uid"]): d for d in reap.discover(timeout=20)})  # fresh values
+                for fid in mine:
+                    fx = by_id[fid]
+                    addr, mode = targets[fid]
+                    dev = cache.get(fx["uid"])
+                    if dev is None:
+                        errors.append("%s: didn't answer the box's search." % fx["label"])
+                        continue
+                    if int(dev.get("dmx_a", -1)) + 1 == addr and int(dev.get("dmx_p") or 0) == mode:
+                        self._write_back(fl, fx["uid"], address=addr, mode=mode)
+                        done.append(fx["label"])
+                        continue
+                    try:
+                        reap.setup(reap_uid(fx["uid"]), (dev.get("u_l") or "").strip(), addr, mode, dev)
+                    except ReapError as e:
+                        errors.append("%s: %s" % (fx["label"], e))
+                        continue
+                    dev["dmx_a"], dev["dmx_p"] = addr - 1, mode
+                    self._write_back(fl, fx["uid"], address=addr, mode=mode)
+                    done.append(fx["label"])
+        finally:
+            app.scan_lock.release()
+        if not errors:
+            eng.set_hold(False)
+        return {"ok": not errors, "done": done, "errors": errors, "held": bool(errors)}
 
     def _settings_view(self):
         st = self.app.store
@@ -776,11 +915,28 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
+def plan_addresses(fl, box_id, start=1, fixture_ids=None, gap=0, modes=None):
+    """Pure: {fixture id: address} giving the chosen fixtures consecutive blocks (by footprint,
+    list order), skipping channels used by other fixtures on the same box. `modes` overrides
+    fixture modes for the plan (e.g. {id: 7}) without touching the store."""
+    from .store import fixture_footprint
+    fake = {"fixtures": [dict(fx, mode=(modes or {}).get(fx["id"], fx["mode"])) for fx in fl["fixtures"]]}
+    return {c["id"]: c["address"] for c in _autopatch_core(fake, box_id, start, fixture_ids, gap)}
+
+
 def autopatch(store, fl, box_id, start, fixture_ids=None, gap=0):
+    with store.lock:
+        changed = _autopatch_core(fl, box_id, start, fixture_ids, gap)
+        fl["rev"] = fl.get("rev", 0) + 1
+        store.bump(fl)
+    return {"changed": changed}
+
+
+def _autopatch_core(fl, box_id, start, fixture_ids=None, gap=0):
     """Give the chosen fixtures consecutive blocks by footprint, in list order, skipping over
     channels used by fixtures on the same box that are not being re-addressed."""
     from .store import fixture_footprint
-    with store.lock:
+    if True:
         chosen = [fx for fx in fl["fixtures"]
                   if (not box_id or fx.get("box_id") == box_id) and (not fixture_ids or fx["id"] in fixture_ids)]
         chosen_ids = {fx["id"] for fx in chosen}
@@ -809,13 +965,14 @@ def autopatch(store, fl, box_id, start, fixture_ids=None, gap=0):
             fx["address"] = addr
             changed.append({"id": fx["id"], "address": addr})
             addr += fp + max(0, gap)
-        fl["rev"] = fl.get("rev", 0) + 1
-        store.bump(fl)
-    return {"changed": changed}
+    return changed
 
 
 def make_server(app: App, host: str = "0.0.0.0", port: int = 8080) -> ThreadingHTTPServer:
     handler = type("BoundHandler", (Handler,), {"app": app})
-    srv = ThreadingHTTPServer((host, port), handler)
+    server_cls = ThreadingHTTPServer
+    if platform.system() == "Windows":  # don't let a second copy share the web port silently
+        server_cls = type("ExclusiveServer", (ThreadingHTTPServer,), {"allow_reuse_address": False})
+    srv = server_cls((host, port), handler)
     srv.daemon_threads = True
     return srv

@@ -113,6 +113,7 @@ const S = {
   floatId: localStorage.getItem("fl.float") || null,
   tab: localStorage.getItem("fl.tab") || "look",
   sel: new Set(),
+  patchSel: new Set(),  // fixtures ticked on the Patch tab for bulk edits
   rev: 0,            // project structure revision (patch/looks/palette); other devices' edits bump it
   pointerDown: false,
   scan: {},          // box_id -> scan result
@@ -203,7 +204,7 @@ function renderStatus() {
   if (e.hold) { pill.className = "status-pill warn"; txt.textContent = "Re-addressing, output at zero"; }
   else if (e.sweep) { pill.className = "status-pill warn"; txt.textContent = "Address finder running"; pill.title = "Everything else is dark. Stop it on the Patch tab."; }
   const rb = $("#releaseBtn");
-  rb.textContent = e.output ? "Release" : "Released";
+  rb.textContent = e.hold ? "Clear hold" : e.output ? "Release" : "Released";
   rb.className = "btn small " + (e.output ? "danger" : "off");
   const bb = $("#blackoutBtn");
   bb.className = "btn small " + (e.blackout ? "danger" : "off");
@@ -685,13 +686,12 @@ function renderPatch(body, fl) {
     h("button", { class: "btn small", onclick: () => autoPatch(fl) }, "Auto-address"),
     h("button", { class: "btn small ghost icon", title: "Add fixture", onclick: () => { fl.fixtures.push({ id: "fx_" + uid8(), label: "New " + (fl.fixtures.length + 1), type_id: "", variant: "TW", mode: 11, box_id: fl.boxes[0] && fl.boxes[0].id, address: null, uid: null, notes: "" }); saveFloat(fl, true).then(() => renderMain()); } }, "+")));
   fxCard.append(problemsBox(fl));
+  fxCard.append(bulkBar(fl));
   fxCard.append(h("div", { class: "tbl-wrap" }, fixtureTable(fl)));
   fxCard.append(foundExtras(fl));
   // Writing the patch to the real lights belongs after the patch is edited, not next to the scan results.
-  const sendable = fl.boxes.filter(b => S.scan[b.id] && (S.scan[b.id].devices || []).length);
-  if (sendable.length) fxCard.append(h("hr", { class: "rule" }), h("div", { class: "btn-row" },
-    sendable.map(b => h("button", { class: "btn small gold", onclick: () => pushAddresses(fl, b, S.scan[b.id]) },
-      "Send addresses to fixtures" + (fl.boxes.length > 1 ? " (" + b.name + ")" : "")))));
+  if (fl.fixtures.some(f => f.uid)) fxCard.append(h("hr", { class: "rule" }), h("div", { class: "btn-row" },
+    h("button", { class: "btn small gold", onclick: () => pushAddresses(fl) }, "Send addresses to fixtures")));
   body.append(fxCard);
 
   const more = h("div", { class: "card" });
@@ -755,6 +755,51 @@ function discoverResults(fl) {
   return wrap;
 }
 
+function bulkBar(fl) {
+  // Edit many fixtures at once in the patch; "Send addresses to fixtures" then writes them to the lights.
+  for (const id of [...S.patchSel]) if (!fl.fixtures.some(f => f.id === id)) S.patchSel.delete(id);
+  const chosen = fl.fixtures.filter(f => S.patchSel.has(f.id));
+  if (!chosen.length) return h("div");
+  const types = [...new Set(chosen.map(f => f.variant))];
+  const typeSel = h("select", { class: "f", style: { width: "auto" } },
+    h("option", { value: "" }, types.length === 1 ? { TW: "TW", RGBW: "RGBW", PW: "White" }[types[0]] : "Mixed types"),
+    [["TW", "TW"], ["RGBW", "RGBW"], ["PW", "White"]].map(([v, l]) => h("option", { value: v }, "→ " + l)));
+  const modeFor = (v) => Object.values(MODES[v] || {}).map(m => m.mode).concat(v === "TW" ? [7] : []);
+  const modeSel = h("select", { class: "f", style: { width: "auto" } });
+  const fillModes = () => {
+    const v = typeSel.value || (types.length === 1 ? types[0] : null);
+    const modes = v ? modeFor(v) : [7];  // mixed types: only Mode 7 is common to all
+    modeSel.innerHTML = "";
+    modeSel.append(h("option", { value: "" }, "Mode…"), modes.map(m => {
+      const fp = ((MODES[v === "TW" && m === 7 ? "RGBW" : (v || "RGBW")] || {})[m] || {}).footprint;
+      return h("option", { value: m }, "Mode " + m + (fp ? " · " + fp + " ch" : ""));
+    }));
+  };
+  typeSel.onchange = fillModes; fillModes();
+  const apply = async () => {
+    const v = typeSel.value, m = parseInt(modeSel.value, 10);
+    if (!v && !m) { toast("Pick a type or a mode", "bad"); return; }
+    for (const fx of chosen) {
+      if (v) { fx.variant = v; fx.mode = { TW: 11, RGBW: 1, PW: 13 }[v]; }
+      if (m && (modeFor(fx.variant).includes(m))) fx.mode = m;
+    }
+    await saveFloat(fl, true); renderMain();
+    toast(`Updated ${chosen.length} in the patch. Auto-address, then Send to lights.`, "ok");
+  };
+  const autoSel = async () => {
+    const boxes = [...new Set(chosen.map(f => f.box_id))];
+    try {
+      for (const b of boxes) await api("POST", `/api/floats/${fl.id}/autopatch`, { box_id: b, start: 1, fixture_ids: chosen.filter(f => f.box_id === b).map(f => f.id) });
+      await reloadFloat(fl.id); renderMain(); toast("Addresses assigned. Send to lights when ready.", "ok");
+    } catch (e) { toast(e.message, "bad"); }
+  };
+  return h("div", { class: "note", style: { margin: "8px 0", display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" } },
+    h("strong", null, chosen.length + " selected"), typeSel, modeSel,
+    h("button", { class: "btn small gold", onclick: apply }, "Set"),
+    h("button", { class: "btn small", onclick: autoSel }, "Auto-address these"),
+    h("button", { class: "btn small ghost", onclick: () => { S.patchSel.clear(); renderMain(); } }, "Clear"));
+}
+
 function scannedFor(fl) {
   // uid -> {d, b} for every light the last scan of each box found
   const out = {};
@@ -788,13 +833,19 @@ function fixtureTable(fl) {
   const found = scannedFor(fl);
   const scanned = fl.boxes.some(b => S.scan[b.id] && !S.scan[b.id].error);
   const t = h("table", { class: "tbl" });
-  t.append(h("tr", null, ["", "Fixture", "Type", "Mode", fl.boxes.length > 1 ? "Box" : null, "Address", scanned ? "Light" : null, ""].filter(x => x !== null).map(x => h("th", null, x))));
+  const ids = fl.fixtures.map(f => f.id);
+  const allOn = ids.length && ids.every(id => S.patchSel.has(id));
+  const tickAll = h("input", { type: "checkbox", checked: allOn || null, title: "Select all", style: { width: "20px", height: "20px" },
+    onchange: e => { ids.forEach(id => e.target.checked ? S.patchSel.add(id) : S.patchSel.delete(id)); renderMain(); } });
+  t.append(h("tr", null, h("th", null, tickAll), ["", "Fixture", "Type", "Mode", fl.boxes.length > 1 ? "Box" : null, "Address", scanned ? "Light" : null, ""].filter(x => x !== null).map(x => h("th", null, x))));
   const errIds = new Set((fl.problems || []).filter(p => p.level === "error").map(p => p.fixture));
   fl.fixtures.forEach((fx) => {
     const st = stateOf(fl, fx);
     const modeOpts = Object.values(MODES[fx.variant] || {}).map(m => h("option", { value: m.mode, selected: m.mode === fx.mode }, m.mode + " · " + m.footprint + " ch"));
     if (fx.variant === "TW") modeOpts.push(h("option", { value: 7, selected: fx.mode === 7 }, "7 · 15 ch"));
     t.append(h("tr", { class: errIds.has(fx.id) ? "err" : "" },
+      h("td", null, h("input", { type: "checkbox", checked: S.patchSel.has(fx.id) || null, style: { width: "20px", height: "20px" },
+        onchange: e => { e.target.checked ? S.patchSel.add(fx.id) : S.patchSel.delete(fx.id); renderMain(); } })),
       h("td", null, h("div", { style: { width: "22px", height: "22px", borderRadius: "6px", background: previewCss(fx, st), border: "1px solid rgba(255,255,255,.1)" } })),
       h("td", null, h("input", { class: "f", style: { minWidth: "96px" }, value: fx.label, title: fx.notes || "", onchange: e => { fx.label = e.target.value; saveFloat(fl); } })),
       h("td", null, h("select", { class: "f", style: { width: "84px" }, onchange: e => { fx.variant = e.target.value; fx.mode = { TW: 11, RGBW: 1, PW: 13 }[fx.variant]; saveFloat(fl, true).then(() => renderMain()); } },
@@ -898,7 +949,7 @@ async function applyScan(fl, b, res) {
     if (!d.ok) continue;
     const choice = S.links[d.uid];
     if (choice === "__new") {
-      fl.fixtures.push({ id: "fx_" + uid8(), label: d.label || ("Found " + d.uid.slice(-4)), type_id: "", variant: d.variant_guess, mode: d.mode, box_id: b.id, address: d.address, uid: d.uid, notes: d.model || "" });
+      fl.fixtures.push({ id: "fx_" + uid8(), label: d.label || ("Found " + d.uid.slice(-4)), type_id: "", variant: d.variant_guess || "RGBW", mode: d.mode, box_id: b.id, address: d.address, uid: d.uid, notes: d.model || "" });
       S.links[d.uid] = fl.fixtures[fl.fixtures.length - 1].id;
       added++;
       continue;
@@ -907,7 +958,7 @@ async function applyScan(fl, b, res) {
     const fx = fl.fixtures.find(f => f.id === choice);
     if (!fx) continue;
     for (const other of fl.fixtures) if (other.uid === d.uid && other !== fx) other.uid = null;
-    fx.uid = d.uid; fx.address = d.address; fx.variant = d.variant_guess;
+    fx.uid = d.uid; fx.address = d.address; fx.variant = d.variant_guess || fx.variant;
     if (d.mode) fx.mode = d.mode;
     linked++;
   }
@@ -917,27 +968,10 @@ async function applyScan(fl, b, res) {
 }
 
 async function pushAddresses(fl, b, res) {
-  const todo = fl.fixtures.filter(f => f.box_id === b.id && f.uid && f.address && res.devices.some(d => d.uid === f.uid));
+  const todo = fl.fixtures.filter(f => f.uid && f.address);
   if (!todo.length) { toast("Scan first, so the app knows which light is which.", "bad"); return; }
-  if (!(await confirmBox("Send addresses?", `Write address and mode to ${todo.length} fixture(s) on ${b.name}?`, "Send"))) return;
-  let ok = 0; const errs = [];
-  await api("POST", "/api/output", { action: "hold", on: true });
-  try {
-    for (const fx of todo) {
-      const d = res.devices.find(x => x.uid === fx.uid);
-      try {
-        if (d.mode !== fx.mode) await api("POST", `/api/floats/${fl.id}/rdm`, { box_id: b.id, uid: fx.uid, action: "mode", mode: fx.mode });
-        const r = await api("POST", `/api/floats/${fl.id}/rdm`, { box_id: b.id, uid: fx.uid, action: "address", address: fx.address });
-        Object.assign(d, { address: r.info.address, mode: r.info.mode }); ok++;
-      } catch (e) { errs.push(fx.label + ": " + e.message); }
-    }
-  } finally {
-    await api("POST", "/api/output", { action: "hold", on: false });
-  }
-  await reloadFloat(fl.id);
-  renderMain();
-  if (errs.length) modal("Some fixtures didn't take it", h("ul", null, errs.map(e => h("li", null, e))));
-  else toast(`Sent to ${ok} fixture(s)`, "ok");
+  if (!(await confirmBox("Send to lights?", `Write the patch's address and mode to ${todo.length} light(s)? The float goes live, held dark, while this runs.`, "Send"))) return;
+  await applyToLights(fl, { push: true }, "Sending addresses");
 }
 
 // ------------------------------------------------------------------ address finder
@@ -1134,40 +1168,30 @@ async function runSave(fl, list, verify) {
   } catch (e) { toast(e.message, "bad"); }
 }
 
+async function applyToLights(fl, body, what) {
+  // Runs on the Mac: output goes live and is held at zero while lights change; the patch only
+  // records a light's new mode/address once that light confirms it.
+  toast(what + "… (keep this page open)");
+  let r;
+  try { r = await api("POST", `/api/floats/${fl.id}/apply`, body); }
+  catch (e) { toast(e.message, "bad"); await loadState(); renderMain(); return; }
+  await loadState(); renderStatus(); renderMain();
+  if (r.errors.length) modal("Some lights didn't change", h("div", null,
+    r.done.length ? h("p", null, "Done: " + r.done.join(", ")) : null,
+    h("ul", null, r.errors.map(e => h("li", null, e))),
+    h("div", { class: "note warn" }, "Output is held at zero so nothing stray reaches the lights. Fix the problem and try again, or press Release.")));
+  else toast(`${what}: ${r.done.length} light(s) done`, "ok");
+}
+
 async function toMode7(fl, list) {
-  const withUid = list.filter(f => f.uid);
-  const noUid = list.filter(f => !f.uid);
+  const linked = list.filter(f => f.uid);
+  const unlinked = list.filter(f => !f.uid);
+  if (!linked.length) { toast("Scan the box first (Patch tab) so the app knows which light is which.", "bad"); return; }
   const msg = h("div", null,
-    h("p", null, withUid.length
-      ? `Set ${withUid.length} fixture(s) to Mode 7 by RDM and give them new 15-channel addresses (other fixtures on the box keep theirs). Output is held at zero while this runs.`
-      : "None of these fixtures are linked to a scanned fixture, so this only changes the patch here. Set Mode 7 and the new addresses in REAP to match."),
-    noUid.length && withUid.length ? h("div", { class: "note warn" }, "Patch-only change (not linked, set these in REAP): " + noUid.map(f => f.label).join(", ")) : null);
+    h("p", null, `Switch ${linked.length} light(s) to Mode 7 and give them new addresses. The float goes live, held dark, while this runs.`),
+    unlinked.length ? h("div", { class: "note warn" }, "Not found by Scan, skipped: " + unlinked.map(f => f.label).join(", ")) : null);
   if (!(await new Promise(res => modal("Switch to Mode 7", msg, [{ label: "Switch", cls: "gold", fn: () => res(true) }])))) return;
-  const errs = [];
-  await api("POST", "/api/output", { action: "hold", on: true });
-  try {
-    for (const f of withUid) {
-      try { await api("POST", `/api/floats/${fl.id}/rdm`, { box_id: f.box_id, uid: f.uid, action: "mode", mode: 7 }); }
-      catch (e) { errs.push(f.label + ": " + e.message); }
-    }
-    let fresh = await reloadFloat(fl.id);
-    for (const f of fresh.fixtures) if (noUid.some(n => n.id === f.id)) f.mode = 7;
-    if (noUid.length) await saveFloat(fresh, true);
-    const switched = fresh.fixtures.filter(f => list.some(x => x.id === f.id) && f.mode === 7);
-    const boxes = [...new Set(switched.map(f => f.box_id))];
-    for (const b of boxes) await api("POST", `/api/floats/${fl.id}/autopatch`, { box_id: b, start: 1, fixture_ids: switched.filter(f => f.box_id === b).map(f => f.id) });
-    fresh = await reloadFloat(fl.id);
-    for (const f of fresh.fixtures.filter(x => x.uid && switched.some(y => y.id === x.id))) {
-      try { await api("POST", `/api/floats/${fl.id}/rdm`, { box_id: f.box_id, uid: f.uid, action: "address", address: f.address }); }
-      catch (e) { errs.push(f.label + " address: " + e.message); }
-    }
-  } finally {
-    await api("POST", "/api/output", { action: "hold", on: false });
-  }
-  await reloadFloat(fl.id);
-  renderMain();
-  if (errs.length) modal("Some fixtures didn't switch", h("ul", null, errs.map(e => h("li", null, e))));
-  else toast("Mode 7 set and re-addressed", "ok");
+  await applyToLights(fl, { to_mode7: linked.map(f => f.id) }, "Switching to Mode 7");
 }
 
 // ------------------------------------------------------------------ setup
@@ -1242,20 +1266,46 @@ function saveInfo() {
   const wrap = h("div", { style: { marginTop: "16px" } }, h("div", { class: "kicker small" }, "Saving"));
   api("GET", "/api/settings").then(st => {
     const ago = (t) => t ? Math.max(0, Math.round(Date.now() / 1000 - t)) + " s ago" : "not yet";
-    const input = h("input", { class: "f", value: st.mirror_dir || "", placeholder: "Folder path, e.g. ~/Dropbox/Show backups" });
     wrap.append(
       h("p", { class: "hint", style: { margin: "4px 0" } }, "Every change saves on this computer within a second. Last save: " + ago(st.last_saved) + "."),
       h("div", { class: "mono", style: { fontSize: "12px", color: "var(--muted)", wordBreak: "break-all" } }, st.data_file),
       h("div", { class: "field", style: { marginTop: "10px" } }, h("label", null, "Backup copy folder"),
-        h("div", { class: "btn-row", style: { flexWrap: "nowrap" } }, input,
-          h("button", { class: "btn small", onclick: async () => {
-            try { await api("POST", "/api/settings", { mirror_dir: input.value }); toast("Backup folder set", "ok"); openSetup(); }
-            catch (e) { toast(e.message, "bad"); }
-          } }, "Set"))),
+        st.mirror_dir ? h("div", { class: "mono", style: { fontSize: "12px", wordBreak: "break-all" } }, st.mirror_dir)
+          : h("div", { class: "note warn" }, "Not set. If this computer dies, the floats go with it."),
+        h("div", { class: "btn-row", style: { marginTop: "6px" } },
+          h("button", { class: "btn small", onclick: () => chooseFolder(st.mirror_dir) }, st.mirror_dir ? "Change…" : "Choose…"),
+          st.mirror_dir ? h("button", { class: "btn small ghost", onclick: async () => { await api("POST", "/api/settings", { mirror_dir: "" }); openSetup(); } }, "Turn off") : null)),
       st.mirror_error ? h("div", { class: "note bad" }, "Backup copy failed: " + st.mirror_error)
         : st.mirror_dir ? h("p", { class: "hint" }, "Copies here every 30 s. Last copy: " + ago(st.last_mirrored) + ".") : null);
   }).catch(() => {});
   return wrap;
+}
+
+async function chooseFolder(start) {
+  // Browse folders on the computer running the app (not the iPad), then pick one for backups.
+  let cur;
+  try { cur = await api("GET", "/api/folders?path=" + encodeURIComponent(start || "")); }
+  catch (e) { cur = await api("GET", "/api/folders?path="); }
+  const body = h("div");
+  const draw = () => {
+    body.innerHTML = "";
+    body.append(h("div", { class: "kicker small" }, "On this computer"),
+      h("div", { class: "btn-row", style: { margin: "6px 0 12px" } }, cur.places.map(pl =>
+        h("button", { class: "btn small", onclick: () => go(pl.path) }, pl.name))));
+    if (!cur.path) { body.append(h("p", { class: "hint" }, "Pick a place to start.")); return; }
+    body.append(h("div", { class: "mono", style: { fontSize: "13px", wordBreak: "break-all", color: "var(--champagne)" } }, cur.path),
+      h("div", { style: { maxHeight: "40vh", overflow: "auto", margin: "8px 0", borderTop: "1px solid var(--line)" } },
+        cur.parent ? h("div", { class: "float-item", style: { padding: "8px" }, onclick: () => go(cur.parent) }, "‹ Up") : null,
+        cur.folders.length ? cur.folders.map(f => h("div", { class: "float-item", style: { padding: "8px" }, onclick: () => go(f.path) }, "📁 " + f.name))
+          : h("p", { class: "hint" }, "No folders inside.")));
+  };
+  const go = async (path) => { try { cur = await api("GET", "/api/folders?path=" + encodeURIComponent(path)); draw(); } catch (e) { toast(e.message, "bad"); } };
+  draw();
+  modal("Backup copy folder", body, [{ label: "Use this folder", cls: "gold", fn: async () => {
+    if (!cur.path) { toast("Pick a folder first", "bad"); return true; }
+    try { await api("POST", "/api/settings", { mirror_dir: cur.path }); toast("Backups will copy here", "ok"); setTimeout(openSetup, 50); }
+    catch (e) { toast(e.message, "bad"); return true; }
+  } }]);
 }
 
 function networkPicker(net, ifs) {

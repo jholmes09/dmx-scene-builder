@@ -146,7 +146,12 @@ class Store:
             wrote_main = self._dirty
             self._dirty = False
         if wrote_main:
-            _atomic_write(self.path, snapshot)  # temp file + fsync + rename: a crash can't leave half a file
+            try:
+                _atomic_write(self.path, snapshot)  # temp file + fsync + rename: a crash can't leave half a file
+            except OSError:
+                with self.lock:
+                    self._dirty = True  # try again on the next tick (e.g. antivirus briefly locking the file)
+                raise
             self.last_saved = time.time()
             self._mirror_pending = True
         self._mirror(snapshot)
@@ -161,6 +166,14 @@ class Store:
             backups = sorted((self.dir / "backups").glob("project-*.json"))
             for old in backups[:-100]:
                 old.unlink()
+            hourly = self.dir / "backups" / "hourly"
+            hourly.mkdir(exist_ok=True)
+            hour = time.strftime("%Y%m%d-%H")
+            if not (hourly / ("project-%s.json" % hour)).exists():  # one per hour, kept 7 days
+                with open(hourly / ("project-%s.json" % hour), "w") as f:
+                    f.write(snapshot)
+                for old in sorted(hourly.glob("project-*.json"))[:-168]:
+                    old.unlink()
 
     def _mirror(self, snapshot: str, force: bool = False):
         """Copy the project to the backup folder (e.g. Dropbox) at most every 30 s."""
@@ -287,14 +300,15 @@ class Store:
                     added += 1
                 elif resolutions.get(fid) == "theirs" and not _floats_equal(mine_by_id[fid], fl):
                     validate_float(fl)
+                    fl["rev"] = int(mine_by_id[fid].get("rev", 0)) + 1  # stale iPad edits can't overwrite it
                     for i, old in enumerate(self.data["floats"]):
                         if old["id"] == fid:
                             self.data["floats"][i] = fl
                             break
                     replaced += 1
-            existing_names = {c["name"] for c in self.data.get("palette", [])}
+            existing = {c.get("id") for c in self.data.get("palette", [])}
             for c in incoming.get("palette", []):
-                if c.get("name") not in existing_names:
+                if c.get("id") not in existing:  # by id: the other computer's own "Warm" is kept too
                     self.data.setdefault("palette", []).append(c)
             if added or replaced:
                 self.bump()
