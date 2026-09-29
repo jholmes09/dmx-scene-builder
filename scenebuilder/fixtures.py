@@ -200,6 +200,31 @@ def role_values(variant: str, mode: int, state: dict, special: int = 0, cal: Opt
     return vals
 
 
+def mix_values(variant: str, mode: int, state: dict, cal: Optional[dict] = None) -> dict:
+    """What the light is asked to make, for people: R/G/B/W 0-255 before the dimmer, brightness %,
+    and the fixture's own colour-temperature setting when that's how the white is made."""
+    s = normalize_state(state, variant)
+    out = {"dim": round(s["dim"] * 100)}
+    if variant == "RGBW":
+        v = role_values("RGBW", mode, dict(s, dim=1.0), 0, cal)
+        out.update({c: int(round(v.get(c, 0.0) * 255)) for c in "rgbw"})
+        if s["kind"] == "white" and v.get("ctc_byte"):
+            out["ctc_k"] = int(round(ctc_to_kelvin(v["ctc_byte"]) / 10.0) * 10)
+    elif variant == "TW":
+        out["k"] = int(max(TW_MIN_K, min(TW_MAX_K, s["cct"])))
+    return out
+
+
+def describe_mix(variant: str, mode: int, state: dict, cal: Optional[dict] = None) -> str:
+    m = mix_values(variant, mode, state, cal)
+    if variant == "RGBW":
+        txt = "%d%%  R %d  G %d  B %d  W %d" % (m["dim"], m["r"], m["g"], m["b"], m["w"])
+        return txt + ("  (fixture white %dK)" % m["ctc_k"] if "ctc_k" in m else "")
+    if variant == "TW":
+        return "%d%%  %dK" % (m["dim"], m["k"])
+    return "%d%%" % m["dim"]
+
+
 def render(variant: str, mode: int, state: dict, special: int = 0, cal: Optional[dict] = None) -> bytes:
     """Return the fixture's DMX footprint bytes for a state. `cal` = eye-tuned RGBW whites."""
     roles = mode_info(variant, mode)["roles"]

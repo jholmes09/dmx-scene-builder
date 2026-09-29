@@ -611,7 +611,7 @@ class Handler(BaseHTTPRequestHandler):
         eng = app.engine
         with eng.lock:
             if eng.hold:
-                raise RuntimeError("Fixtures are being re-addressed. Wait for that to finish.")
+                raise RuntimeError("Output is held dark because the last address or mode change didn't finish. Press Clear hold (top right), then try again.")
             if eng.job and eng.job.get("state") == "running":
                 raise RuntimeError("A save is running. Wait for it to finish.")
             if eng.active_float != fl["id"] or not eng.ctl.output_enabled:
@@ -925,7 +925,8 @@ class Handler(BaseHTTPRequestHandler):
         from .patchsheet import render_patch_sheet
         with self.app.store.lock:
             fl = self.app.store.get_float(fid)
-            html = render_patch_sheet(self.app.store.data.get("project", ""), fl) if fl else None
+            html = render_patch_sheet(self.app.store.data.get("project", ""), fl,
+                                      (self.app.store.data.get("white_cal") or {}).get("RGBW")) if fl else None
         if html is None:
             return self.send_error(404)
         data = html.encode()

@@ -190,7 +190,7 @@ class MissingPinnedAdapterTests(unittest.TestCase):
     def test_poll_falls_back_when_pinned_adapter_is_gone(self):
         ctl = ArtNetController(port=0).start()
         sent = []
-        ctl._send = lambda data, ip, port: sent.append(ip) or True
+        ctl._send_quiet = lambda data, ip, port: sent.append(ip) or True
         try:
             ctl.set_preferred_interface("10.254.254.254")  # not on this machine
             ctl.poll([], wait=0.05)

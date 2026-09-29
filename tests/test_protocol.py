@@ -179,3 +179,18 @@ class TunedWhiteTests(unittest.TestCase):
     def test_mode1_uses_tuned_mix_too(self):
         d = fixtures.render("RGBW", 1, {"dim": 1, "kind": "white", "cct": 6500}, cal=self.CAL)
         self.assertEqual(list(d), [204, 255, 230, 255])
+
+
+class MixValuesTests(unittest.TestCase):
+    def test_hue_235_is_nearly_pure_blue(self):
+        m = fixtures.mix_values("RGBW", 7, {"dim": 0.8, "kind": "color", "hue": 235, "sat": 1})
+        self.assertEqual((m["r"], m["g"], m["b"], m["w"], m["dim"]), (0, 21, 255, 0, 80))
+
+    def test_fixture_white_reports_kelvin(self):
+        m = fixtures.mix_values("RGBW", 7, {"dim": 1, "kind": "white", "cct": 3200})
+        self.assertEqual(m["ctc_k"], 3200)
+        self.assertEqual(m["r"], 255)
+
+    def test_mode1_white_is_white_led_only(self):
+        m = fixtures.mix_values("RGBW", 1, {"dim": 1, "kind": "white", "cct": 3200})
+        self.assertEqual((m["r"], m["g"], m["b"], m["w"]), (0, 0, 0, 255))

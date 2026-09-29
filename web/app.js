@@ -104,6 +104,45 @@ function previewCss(fx, st) {
   const k = d <= 0 ? 0 : 0.12 + 0.88 * Math.pow(d, 0.6);
   return `rgb(${rgb.map(c => Math.round(c * k * 255)).join(",")})`;
 }
+function tunedMix(k) {
+  const cal = ((S.project && S.project.white_cal) || {}).RGBW || {};
+  const pts = Object.entries(cal).map(([kk, v]) => [parseInt(kk, 10), v]).filter(p => p[1] && p[1].length === 4).sort((a, b) => a[0] - b[0]);
+  if (!pts.length || k < pts[0][0]) return null;
+  if (k >= pts[pts.length - 1][0]) return pts[pts.length - 1][1];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [k0, a] = pts[i], [k1, b] = pts[i + 1];
+    if (k >= k0 && k <= k1) { const t = (k - k0) / (k1 - k0); return a.map((x, j) => x + (b[j] - x) * t); }
+  }
+  return null;
+}
+
+function mixValues(fx, st) {
+  // Mirrors fixtures.mix_values on the Mac: what the light is asked to make, for record keeping.
+  const v = effVariant(fx), roles = MODES_ROLES(fx), out = { dim: Math.round(st.dim * 100) };
+  if (v === "RGBW") {
+    let r, g, b, w;
+    if (st.kind === "color") { [r, g, b] = hsvToRgb(((st.hue % 360) + 360) % 360, st.sat, 1); w = st.white; }
+    else {
+      const mix = roles.includes("w") ? tunedMix(st.cct) : null;
+      if (mix) [r, g, b, w] = mix;
+      else if (roles.includes("ctc")) { r = g = b = w = 1; out.k = Math.round(clamp(st.cct, 1800, 6500) / 10) * 10; }
+      else if (roles.includes("w")) { r = g = b = 0; w = 1; }
+      else { r = g = b = 1; w = 0; }
+    }
+    Object.assign(out, { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255), w: Math.round(w * 255) });
+  } else if (v === "TW") out.k = Math.round(clamp(st.cct, 2700, 6500));
+  return out;
+}
+
+function mixText(fx, st, short) {
+  const m = mixValues(fx, st);
+  if (effVariant(fx) === "RGBW") {
+    const t = short ? `R${m.r} G${m.g} B${m.b} W${m.w}` : `R ${m.r} · G ${m.g} · B ${m.b} · W ${m.w}`;
+    return m.k ? t + (short ? "" : ` (fixture white ${m.k}K)`) : t;
+  }
+  return m.k ? m.k + "K" : "";
+}
+
 function MODES_ROLES(fx) { const m = (MODES[effVariant(fx)] || {})[fx.mode]; return m ? m.roles : []; }
 function footprint(fx) { return MODES_ROLES(fx).length || 0; }
 
@@ -201,7 +240,7 @@ function renderStatus() {
   else if (S.sim) { pill.classList.add("sim"); txt.textContent = "Simulator on"; pill.title = "Virtual E-Box is running"; }
   else { txt.textContent = "Not sending"; pill.title = "Nothing is being sent to the boxes"; }
   if (e.paused_for_rdm) { txt.textContent = "Talking to fixtures"; }
-  if (e.hold) { pill.className = "status-pill warn"; txt.textContent = "Re-addressing, output at zero"; }
+  if (e.hold) { pill.className = "status-pill warn"; txt.textContent = "Held dark"; pill.title = "A mode/address change didn't finish, so output is held at zero. Press Clear hold."; }
   else if (e.sweep) { pill.className = "status-pill warn"; txt.textContent = "Address finder running"; pill.title = "Everything else is dark. Stop it on the Patch tab."; }
   const rb = $("#releaseBtn");
   rb.textContent = e.hold ? "Clear hold" : e.output ? "Release" : "Released";
@@ -315,7 +354,9 @@ function renderFloatHead() {
         fl.run_mode === "live_dmx" ? h("span", { class: "chip-warn", style: { cursor: "default" } }, "Live DMX float") : null,
         noIp ? h("button", { class: "chip-warn", onclick: () => { S.tab = "patch"; renderMain(); } }, "Set box IP") : null,
         errs ? h("button", { class: "chip-warn", onclick: () => { S.tab = "patch"; renderMain(); } }, "Address overlap") : null)),
-    live
+    S.engine.hold && live
+      ? h("button", { class: "btn danger", onclick: () => $("#releaseBtn").click() }, "Held dark · Clear hold")
+      : live
       ? h("span", { class: "status-pill live" }, h("span", { class: "dot" }), "Live")
       : h("button", { class: "btn gold", onclick: () => goLive(fl) }, "Go live")));
 }
@@ -376,6 +417,7 @@ function renderLook(body, fl) {
       h("div", { class: "swatch", style: { background: previewCss(fx, st) } }),
       h("div", { class: "lbl", title: fx.notes || "" }, fx.label || "Fixture"),
       h("div", { class: "sub" }, h("span", { class: "type" }, fx.variant === "RGBW" ? "RGB+W" : fx.variant), h("span", null, Math.round(st.dim * 100) + "%")),
+      h("div", { class: "sub mono", style: { fontSize: "10px" } }, mixText(fx, st, true)),
       null);
   }
   function refreshTiles() {
@@ -397,13 +439,20 @@ function renderLook(body, fl) {
     }
     const variants = new Set(chosen.map(effVariant));
     const states = chosen.map(f => stateOf(fl, f));
-    card.append(h("div", { class: "sel-summary" }, chosen.length === 1 ? chosen[0].label : chosen.length + " selected"));
+    const texts = [...new Set(chosen.map(f => Math.round(stateOf(fl, f).dim * 100) + "% · " + mixText(f, stateOf(fl, f), false)))];
+    card.append(h("div", { class: "sel-summary" }, chosen.length === 1 ? chosen[0].label : chosen.length + " selected"),
+      h("div", { class: "mono", id: "mixLine", style: { fontSize: "13px", color: "var(--champagne)", margin: "2px 0 6px" } }, texts.length === 1 ? texts[0] : "Mixed values"));
 
     const apply = (partial) => {
       const changes = {};
       for (const f of chosen) changes[f.id] = typeof partial === "function" ? partial(f, stateOf(fl, f)) : partial;
       sendLive(fl, changes);
       refreshTiles();
+      const ml = $("#mixLine");
+      if (ml) {
+        const t = [...new Set(chosen.map(f => Math.round(stateOf(fl, f).dim * 100) + "% · " + mixText(f, stateOf(fl, f), false)))];
+        ml.textContent = t.length === 1 ? t[0] : "Mixed values";
+      }
     };
 
     // intensity
@@ -1382,8 +1431,11 @@ async function boot() {
   document.addEventListener("pointercancel", () => { S.pointerDown = false; }, true);
   $("#setupBtn").onclick = openSetup;
   $("#releaseBtn").onclick = async () => {
+    const wasHold = S.engine.hold, wasLive = S.engine.output;
     const r = await api("POST", "/api/output", { action: S.engine.output ? "release" : "resume" });
     S.engine = r.engine; renderStatus(); renderRail(); renderFloatHead();
+    if (wasHold) toast("Hold cleared. Press Go live to send your look again.", "ok");
+    else if (wasLive) toast("Stopped sending. The box keeps the last look (DMX Hold). Use Blackout to go dark.");
     if (!S.engine.output && !S.engine.active_float) toast("Pick a float and press Go live");
   };
   $("#blackoutBtn").onclick = async () => {

@@ -359,6 +359,10 @@ def validate_float(fl: dict):
             if not lo <= b[k] <= hi:
                 raise ValueError("%s: %s must be %d-%d" % (b.get("name"), k, lo, hi))
         b["ip"] = (b.get("ip") or "").strip()
+        if b["ip"]:
+            parts = b["ip"].split(".")
+            if len(parts) != 4 or not all(x.isdigit() and 0 <= int(x) <= 255 for x in parts):
+                raise ValueError("%s: '%s' isn't an IP address (four numbers, like 10.248.31.11)." % (b.get("name"), b["ip"]))
     for fx in fl["fixtures"]:
         if fx.get("variant") not in fixtures.MODES:
             raise ValueError("%s: unknown fixture type %r" % (fx.get("label"), fx.get("variant")))

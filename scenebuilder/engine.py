@@ -243,7 +243,7 @@ class Engine:
                 raise RuntimeError("None of the selected fixtures are in Mode 7 with an address. "
                                    "Switch them to Mode 7 first (Addressing tab, or REAP).")
             if self.hold:
-                raise RuntimeError("Fixtures are being re-addressed. Wait for that to finish.")
+                raise RuntimeError("Output is held dark because the last address or mode change didn't finish. Press Clear hold (top right), then try again.")
             if self._paused_for_rdm:
                 raise RuntimeError("Busy talking to fixtures. Try again in a moment.")
             # Never save a dark look: clear Blackout, the address finder and flashes first.

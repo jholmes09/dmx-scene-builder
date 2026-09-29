@@ -66,12 +66,15 @@ class FakeBox:
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
-        self.ip = "127.0.0.1:%d" % self.srv.server_address[1]
+        self.ip = "127.0.0.1"
+        self.port = self.srv.server_address[1]
 
 
 class ReapPathTests(unittest.TestCase):
     def setUp(self):
         self.box = FakeBox()
+        self._old_port = reap_mod.WEB_PORT
+        reap_mod.WEB_PORT = self.box.port
         self.tmp = tempfile.TemporaryDirectory()
         self.store = Store(Path(self.tmp.name))
         self.ctl = ArtNetController(port=0).start()
@@ -93,6 +96,7 @@ class ReapPathTests(unittest.TestCase):
         self.ctl.stop()
         self.store.close()
         self.box.srv.shutdown()
+        reap_mod.WEB_PORT = self._old_port
         self.tmp.cleanup()
 
     def test_reap_setup_uses_zero_based_fields_and_confirms_right_light(self):

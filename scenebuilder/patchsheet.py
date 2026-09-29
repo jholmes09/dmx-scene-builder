@@ -12,20 +12,12 @@ def _e(x) -> str:
     return html.escape("" if x is None else str(x))
 
 
-def describe_state(fx: dict, st: dict) -> str:
-    if not st:
-        return "default"
-    s = fixtures.normalize_state(st, effective_variant(fx))
-    pct = "%d%%" % round(s["dim"] * 100)
-    if s["kind"] == "color":
-        extra = " + W %d%%" % round(s["white"] * 100) if s["white"] > 0 else ""
-        return "%s  colour H%d S%d%%%s" % (pct, s["hue"], s["sat"] * 100, extra)
-    if effective_variant(fx) == "PW":
-        return pct
-    return "%s  %dK" % (pct, s["cct"])
+def describe_state(fx: dict, st: dict, cal=None) -> str:
+    v = effective_variant(fx)
+    return fixtures.describe_mix(v, fx["mode"], st or {}, cal if v == "RGBW" else None)
 
 
-def render_patch_sheet(project: str, fl: dict) -> str:
+def render_patch_sheet(project: str, fl: dict, cal=None) -> str:
     boxes = {b["id"]: b for b in fl["boxes"]}
     rows = []
     for fx in sorted(fl["fixtures"], key=lambda f: (f.get("box_id") or "", f.get("address") or 9999, f["label"])):
@@ -35,7 +27,7 @@ def render_patch_sheet(project: str, fl: dict) -> str:
         rows.append("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" % (
             _e(fx["label"]), _e(fixtures.VARIANT_LABELS.get(fx["variant"], fx["variant"])), _e(fx["mode"]),
             _e("%d-%d" % (a, a + fp - 1) if a else "not set"), _e(b.get("name", "")), _e(fx.get("uid") or ""),
-            _e(describe_state(fx, fl["live"].get(fx["id"]))), _e(fx.get("notes", ""))))
+            _e(describe_state(fx, fl["live"].get(fx["id"]), cal)), _e(fx.get("notes", ""))))
     box_rows = "".join("<tr><td>%s</td><td>%s</td><td>%d : %d : %d</td><td>%s</td></tr>" % (
         _e(b["name"]), _e(b.get("ip") or "not set"), b["net"], b["subnet"], b["universe"], _e(b.get("notes", "")))
         for b in fl["boxes"])

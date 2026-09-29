@@ -27,6 +27,7 @@ import urllib.parse
 import urllib.request
 from typing import Dict, List, Optional
 
+WEB_PORT = 80  # the box's web page; tests point this at a fake box
 DEFAULT_USER = "robe"
 DEFAULT_PASSWORD = "2479"
 ESTA_ROBE = "5253"
@@ -55,7 +56,8 @@ class Reap:
     # ------------------------------------------------------------ transport
     def _post(self, path: str, data: Optional[Dict] = None) -> dict:
         body = urllib.parse.urlencode(data or {}).encode()
-        req = urllib.request.Request("http://%s/%s" % (self.ip, path.lstrip("/")), data=body, method="POST",
+        host = self.ip if WEB_PORT == 80 else "%s:%d" % (self.ip, WEB_PORT)
+        req = urllib.request.Request("http://%s/%s" % (host, path.lstrip("/")), data=body, method="POST",
                                      headers={"Authorization": self._auth, "Accept-Encoding": "gzip",
                                               "Content-Type": "application/x-www-form-urlencoded"})
         try:

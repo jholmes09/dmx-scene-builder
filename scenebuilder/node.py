@@ -206,6 +206,15 @@ class ArtNetController:
             self.last_send_error = "%s:%d - %s" % (ip, port, e)
             return False
 
+    def _send_quiet(self, data: bytes, ip: str, port: int) -> bool:
+        """For discovery: most swept addresses are empty, which isn't an error worth showing."""
+        try:
+            self.sock.sendto(data, (ip, port))
+            self.packets_sent += 1
+            return True
+        except OSError:
+            return False
+
     def set_universe(self, target: Target, data: bytes):
         with self._lock:
             buf = self._buffers.setdefault(target, bytearray(512))
@@ -331,7 +340,7 @@ class ArtNetController:
             dests.add((t[0], int(t[1])))
         started = time.time()
         for d in dests:
-            self._send(pkt, d[0], d[1])
+            self._send_quiet(pkt, d[0], d[1])
         time.sleep(wait)
         with self._lock:
             return [n for n in self.nodes.values() if n["seen"] >= started]
