@@ -293,6 +293,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"version": __version__, "project": snap, "engine": eng.status(),
                                "settings": {"pause_during_rdm": app.pause_during_rdm},
                                "modes": fixtures.mode_catalog(), "sim": app.sim.state() if app.sim else None})
+        if p == ["debug"] and method == "GET":
+            return self._json({"rdm_log": app.ctl.rdm_log[-50:], "raw_rdm": app.ctl.raw_rdm_log[-40:],
+                               "packets_sent": app.ctl.packets_sent, "packets_received": app.ctl.packets_received})
         if p == ["status"] and method == "GET":
             return self._json({"engine": eng.status(), "sim": app.sim.state() if app.sim else None,
                                "rev": store.data.get("rev", 0)})
@@ -355,6 +358,13 @@ class Handler(BaseHTTPRequestHandler):
             store.replace_project(self._body())
             eng.refresh()
             return self._json({"ok": True})
+        if p == ["project", "merge_plan"] and method == "POST":
+            return self._json(store.plan_merge(self._body()))
+        if p == ["project", "merge_apply"] and method == "POST":
+            b = self._body()
+            res = store.apply_merge(b.get("incoming") or {}, b.get("resolutions") or {})
+            eng.refresh()
+            return self._json(res)
         if p == ["project", "name"] and method == "POST":
             with store.lock:
                 store.data["project"] = str(self._body().get("name") or "Untitled")[:80]

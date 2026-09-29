@@ -84,9 +84,12 @@ app under Setup.
 
 ## Known unknowns
 
-- Whether the E-Box actually answers RDM requests sent over Art-Net has not
-  been tested on real hardware yet. If it doesn't, addressing falls back to
-  REAP (the box's own web page) or Robe Toolkit.
+- Tested on a real E-Box Remote (2026-09-28): it answers ArtTodRequest with a
+  single UID (apparently the box itself) and does not answer RDM GET/SET for
+  it, and the connected Calumma modules never appear. So on this hardware,
+  Scan and the RDM save do not work over Art-Net. Address fixtures in REAP
+  (the box's own web page) or Robe Toolkit, check them with the Address
+  finder, and use the Mode 7 save, which is plain DMX.
 - The RDM save-by-RDM path relies on a manufacturer setting named "Init
   position LEDs" (documented in the E-Box manual v1.6). Its availability on
   current firmware is unverified.

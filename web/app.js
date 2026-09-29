@@ -750,7 +750,7 @@ function fixtureTable(fl) {
       h("td", null, h("div", { style: { width: "22px", height: "22px", borderRadius: "6px", background: previewCss(fx, st), border: "1px solid rgba(255,255,255,.1)" } })),
       h("td", null, h("input", { class: "f", style: { minWidth: "96px" }, value: fx.label, title: fx.notes || "", onchange: e => { fx.label = e.target.value; saveFloat(fl); } })),
       h("td", null, h("select", { class: "f", style: { width: "84px" }, onchange: e => { fx.variant = e.target.value; fx.mode = { TW: 11, RGBW: 1, PW: 13 }[fx.variant]; saveFloat(fl, true).then(() => renderMain()); } },
-        [["TW", "TW"], ["RGBW", "RGB"], ["PW", "White"]].map(([v, l]) => h("option", { value: v, selected: v === fx.variant }, l)))),
+        [["TW", "TW"], ["RGBW", "RGBW"], ["PW", "White"]].map(([v, l]) => h("option", { value: v, selected: v === fx.variant }, l)))),
       h("td", null, h("select", { class: "f", style: { width: "96px" }, onchange: e => { fx.mode = parseInt(e.target.value, 10); saveFloat(fl, true).then(() => renderMain()); } }, modeOpts)),
       fl.boxes.length > 1 ? h("td", null, h("select", { class: "f", onchange: e => { fx.box_id = e.target.value; saveFloat(fl); } }, fl.boxes.map(b => h("option", { value: b.id, selected: b.id === fx.box_id }, b.name)))) : null,
       h("td", null, h("input", { class: "f num", type: "number", inputmode: "numeric", min: 1, max: 512, value: fx.address || "", placeholder: "–",
@@ -1146,16 +1146,50 @@ async function openSetup() {
       h("a", { class: "btn small", href: "/api/project", download: "dmx-scene-builder-project.json" }, "Export"),
       h("label", { class: "btn small" }, "Import", h("input", { type: "file", accept: ".json,application/json", class: "hidden", onchange: async (e) => {
         const file = e.target.files[0]; if (!file) return;
+        e.target.value = "";
         try {
           const data = JSON.parse(await file.text());
-          if (!(await confirmBox("Replace project?", "Replaces every float on this Mac. A backup is kept.", "Replace", "danger"))) return;
-          await api("PUT", "/api/project", data); await loadState(); renderRail(); renderMain(); toast("Imported", "ok");
-        } catch (err) { toast("Couldn't import: " + err.message, "bad"); }
+          await startMerge(data);
+        } catch (err) { toast("Couldn't read that file: " + err.message, "bad"); }
       } })),
       h("a", { class: "btn small ghost", href: "/guide.html", target: "_blank" }, "Field guide")),
     h("p", { class: "hint", style: { marginTop: "14px" } }, `v${S.version}`));
   if (ifs.length > 1) pickWrap.append(networkPicker(net, ifs));
   modal("Setup", body);
+}
+
+async function startMerge(incoming) {
+  let plan;
+  try { plan = await api("POST", "/api/project/merge_plan", incoming); }
+  catch (e) { toast(e.message, "bad"); return; }
+  if (!plan.new.length && !plan.conflicts.length) {
+    toast(plan.identical.length ? "Nothing new: this computer already has it" : "That file has no floats", "ok");
+    return;
+  }
+  const resolutions = {};
+  for (const c of plan.conflicts) resolutions[c.id] = "mine";  // safest default: leave it alone
+  const body = h("div");
+  if (plan.new.length) body.append(h("div", { class: "note ok" }, `Add ${plan.new.length}: ` + plan.new.map(f => f.name).join(", ")));
+  if (plan.identical.length) body.append(h("p", { class: "hint" }, `${plan.identical.length} already match.`));
+  if (plan.conflicts.length) {
+    body.append(h("div", { class: "kicker small", style: { marginTop: "12px" } }, "These differ. Keep which?"));
+    for (const c of plan.conflicts) {
+      const mineBtn = h("button", { class: "on" }, `This computer (${c.mine.fixtures})`);
+      const theirsBtn = h("button", null, `The file (${c.theirs.fixtures})`);
+      mineBtn.onclick = () => { resolutions[c.id] = "mine"; mineBtn.className = "on"; theirsBtn.className = ""; };
+      theirsBtn.onclick = () => { resolutions[c.id] = "theirs"; theirsBtn.className = "on"; mineBtn.className = ""; };
+      body.append(h("div", { style: { margin: "8px 0" } }, h("div", null, (c.code ? c.code + " " : "") + c.name),
+        h("div", { class: "seg", style: { marginTop: "6px" } }, mineBtn, theirsBtn)));
+    }
+  }
+  body.append(h("p", { class: "hint", style: { marginTop: "12px" } }, "Nothing on this computer is ever deleted by Import."));
+  modal("Import floats", body, [{ label: "Import", cls: "gold", fn: async () => {
+    try {
+      const r = await api("POST", "/api/project/merge_apply", { incoming, resolutions });
+      await loadState(); renderRail(); renderMain();
+      toast(`Added ${r.added}, replaced ${r.replaced}`, "ok");
+    } catch (e) { toast(e.message, "bad"); return true; }
+  } }]);
 }
 
 function networkPicker(net, ifs) {

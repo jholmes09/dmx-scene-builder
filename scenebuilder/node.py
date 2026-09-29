@@ -142,6 +142,7 @@ class ArtNetController:
         self.packets_received = 0
         self.last_send_error: Optional[str] = None
         self.rdm_log: List[dict] = []
+        self.raw_rdm_log: List[dict] = []  # temporary field diagnostics: every OP_RDM packet in, matched or not
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
@@ -266,8 +267,18 @@ class ArtNetController:
         elif op == artnet.OP_RDM:
             p = artnet.parse_rdm(data)
             if not p:
+                with self._lock:
+                    self.raw_rdm_log.append({"t": time.time(), "from": "%s:%d" % addr, "note": "OP_RDM but parse_rdm() rejected it", "hex": data.hex()})
+                    del self.raw_rdm_log[:-40]
                 return
             msg = rdm.parse(p["rdm"])
+            with self._lock:
+                self.raw_rdm_log.append({"t": time.time(), "from": "%s:%d" % addr, "port_address": p["port_address"],
+                                         "rdm_hex": p["rdm"].hex(), "parsed": None if not msg else
+                                         {"dest": rdm.uid_str(msg.dest), "src": rdm.uid_str(msg.src), "tn": msg.tn,
+                                          "response_type": msg.response_type, "cc": msg.cc, "pid": "0x%04X" % msg.pid,
+                                          "checksum_ok": msg.checksum_ok, "pd_hex": msg.pd.hex()}})
+                del self.raw_rdm_log[:-40]
             if not msg:
                 return
             with self._lock:

@@ -173,6 +173,77 @@ class Store:
             self.data["floats"] = [f for f in self.data["floats"] if f["id"] != fid]
             self.bump()
 
+    # ---------------------------------------------------------- merge import
+    def plan_merge(self, incoming: dict) -> dict:
+        """Compare another computer's project file against this one, float by float.
+        Never mutates anything: safe to call just to preview. A float only one side has is
+        never touched by the merge, so combining two computers' work never deletes anything."""
+        if not isinstance(incoming, dict) or not isinstance(incoming.get("floats"), list):
+            raise ValueError("Not a DMX Scene Builder project file")
+        with self.lock:
+            mine_by_id = {f["id"]: f for f in self.data["floats"]}
+        new, identical, conflicts = [], [], []
+        for fl in incoming["floats"]:
+            fid = fl.get("id")
+            if not fid:
+                continue
+            summary = _float_summary(fl)
+            mine = mine_by_id.get(fid)
+            if mine is None:
+                new.append(summary)
+            elif _floats_equal(mine, fl):
+                identical.append(summary)
+            else:
+                conflicts.append({"id": fid, "code": fl.get("code", ""), "name": fl.get("name", ""),
+                                  "mine": _float_summary(mine), "theirs": summary})
+        return {"new": new, "identical": identical, "conflicts": conflicts}
+
+    def apply_merge(self, incoming: dict, resolutions: dict) -> dict:
+        """Add floats the other computer has that this one doesn't, and replace only the
+        floats you explicitly chose "theirs" for. Everything else on this computer, including
+        every float not mentioned in `incoming`, is left exactly as it is."""
+        if not isinstance(incoming, dict) or not isinstance(incoming.get("floats"), list):
+            raise ValueError("Not a DMX Scene Builder project file")
+        added, replaced = 0, 0
+        with self.lock:
+            mine_by_id = {f["id"]: f for f in self.data["floats"]}
+            incoming.setdefault("palette", [])
+            for fl in incoming["floats"]:
+                fid = fl.get("id")
+                if not fid:
+                    continue
+                for key in ("boxes", "fixtures", "looks"):
+                    fl.setdefault(key, [])
+                if fid not in mine_by_id:
+                    validate_float(fl)
+                    self.data["floats"].append(fl)
+                    added += 1
+                elif resolutions.get(fid) == "theirs" and not _floats_equal(mine_by_id[fid], fl):
+                    validate_float(fl)
+                    for i, old in enumerate(self.data["floats"]):
+                        if old["id"] == fid:
+                            self.data["floats"][i] = fl
+                            break
+                    replaced += 1
+            existing_names = {c["name"] for c in self.data.get("palette", [])}
+            for c in incoming.get("palette", []):
+                if c.get("name") not in existing_names:
+                    self.data.setdefault("palette", []).append(c)
+            if added or replaced:
+                self.bump()
+        return {"added": added, "replaced": replaced}
+
+
+def _float_summary(fl: dict) -> dict:
+    return {"id": fl.get("id"), "code": fl.get("code", ""), "name": fl.get("name", ""),
+            "fixtures": len(fl.get("fixtures") or []), "boxes": len(fl.get("boxes") or []),
+            "looks": len(fl.get("looks") or [])}
+
+
+def _floats_equal(a: dict, b: dict) -> bool:
+    strip = lambda f: {k: v for k, v in f.items() if k != "rev"}
+    return json.dumps(strip(a), sort_keys=True) == json.dumps(strip(b), sort_keys=True)
+
 
 def validate_float(fl: dict):
     if not isinstance(fl, dict) or not fl.get("id"):
