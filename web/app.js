@@ -1424,6 +1424,19 @@ function networkPicker(net, ifs) {
   return wrap;
 }
 
+async function refreshAddr() {
+  // This computer's address(es), so it's easy to type on the iPad. Box-network adapter first.
+  try {
+    const net = await api("GET", "/api/network");
+    const ifs = net.interfaces.filter(i => !i.ip.startsWith("127.") && !i.ip.startsWith("169.254."));
+    ifs.sort((a, b) => (b.ip === net.pinned_ip) - (a.ip === net.pinned_ip));
+    const el = $("#addrLine");
+    el.innerHTML = "";
+    if (!ifs.length) { el.textContent = "No network connection"; return; }
+    el.append("iPad: ", ...ifs.map((i, n) => [n ? "  ·  " : "", h("b", null, `http://${i.ip}:${net.http_port}`)]).flat());
+  } catch (e) { /* server restarting; try again next tick */ }
+}
+
 // ------------------------------------------------------------------ boot
 async function boot() {
   document.addEventListener("pointerdown", () => { S.pointerDown = true; }, true);
@@ -1450,5 +1463,6 @@ async function boot() {
   }
   renderStatus(); renderRail(); renderMain();
   setInterval(pollStatus, 1000);
+  refreshAddr(); setInterval(refreshAddr, 15000);
 }
 boot();

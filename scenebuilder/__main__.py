@@ -43,8 +43,8 @@ def main(argv=None):
     ctl = ArtNetController(port=args.artnet_port).start()
     preferred_ip = store.settings.get("network_interface")
     if preferred_ip and preferred_ip not in {i["ip"] for i in local_interfaces()}:
-        print("Note: the saved network adapter (%s) isn't present right now; using Automatic instead." % preferred_ip)
-        preferred_ip = None
+        # Keep the choice: Find uses every adapter while this one is unplugged, and it again once it's back.
+        print("Note: the saved network adapter (%s) isn't connected right now; searching all until it is." % preferred_ip)
     ctl.set_preferred_interface(preferred_ip)
     app = App(store, ctl, sim_port=args.sim_port)
     if args.sim:

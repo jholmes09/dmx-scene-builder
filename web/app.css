@@ -268,3 +268,8 @@ details.more[open] > summary::before { content: "– "; }
 .big-result { font: 700 18px var(--sans); color: var(--champagne); margin-top: 14px; }
 .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
 @media (max-width: 700px) { .topbar .logo { display: none; } .float-pick { max-width: 60vw; font-size: 17px; } }
+
+.addr-line { position: fixed; right: 12px; bottom: max(8px, env(safe-area-inset-bottom)); z-index: 30; pointer-events: none;
+  font: 12px ui-monospace, Menlo, monospace; color: var(--muted); background: rgba(7,6,5,.85);
+  border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; }
+.addr-line b { color: var(--champagne); font-weight: 600; }
