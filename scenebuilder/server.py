@@ -98,8 +98,14 @@ class App:
         # this finds every Calumma in Pass-Thr, while Art-Net RDM only ever sees the box itself.
         reap = Reap(ip)
         if reap.available():
+            expected = sum(1 for fx in fl["fixtures"] if fx.get("box_id") == box_id)
+            found = {}
             with self.rdm_session():
-                devs = reap.discover()
+                for _ in range(2):  # the box's search sometimes misses a light; one retry fills the gaps
+                    found.update({d["d_uid"]: d for d in reap.discover()})
+                    if len(found) >= expected:
+                        break
+            devs = list(found.values())
             self.reap_devices[ip] = {reap_uid_str(d["d_uid"]): d for d in devs}
             devices = [reap_scan_entry(d) for d in sorted(devs, key=lambda d: d.get("dmx_a", 0))]
             return {"box_id": box_id, "ip": ip, "port_address": pa, "devices": devices, "via": "box web page",
@@ -667,6 +673,16 @@ class Handler(BaseHTTPRequestHandler):
         app = self.app
         ip, port, pa = app.box_target(fl, b["box_id"])
         dev = app.reap_devices.get(ip, {}).get(b["uid"])
+        if dev is None:
+            reap = Reap(ip)
+            if reap.available():
+                # Not known yet (app restarted, or the box's search missed it last time): search again.
+                with app.rdm_session():
+                    devs = reap.discover()
+                app.reap_devices.setdefault(ip, {}).update({reap_uid_str(d["d_uid"]): d for d in devs})
+                dev = app.reap_devices[ip].get(b["uid"])
+                if dev is None:
+                    raise ValueError("That light didn't answer the box's search. Try again in a moment.")
         if dev is not None:
             return self._reap_action(fl, b, ip, dev)
         uid = rdm.uid_from_str(b["uid"])

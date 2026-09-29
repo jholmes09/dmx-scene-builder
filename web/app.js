@@ -466,7 +466,7 @@ function renderLook(body, fl) {
 
     card.append(h("hr", { class: "rule" }),
       h("div", { class: "btn-row" },
-        h("button", { class: "btn small", onclick: () => flashFixtures(fl, chosen) }, "Flash"),
+        h("button", { class: "btn small", onclick: () => flashFixtures(fl, chosen) }, "Identify"),
         chosen.length === 1 && chosen[0].address ? h("span", { class: "hint", style: { margin: 0 } }, `ch ${chosen[0].address}`) : null));
   }
 
@@ -595,12 +595,25 @@ function sliderCtl({ label, min, max, step, value, mixed, fmt, track, onInput })
 }
 
 async function flashFixtures(fl, list) {
-  if (!isLive(fl)) { toast("Go live on this float first, so the flash reaches the lights.", "bad"); return; }
+  // One "Identify" for everything: RDM (works any time) for lights the app knows from a Scan,
+  // otherwise a DMX flash, which only reaches the lights while this float is live.
+  const needLive = [];
+  let rdmCount = 0, dmxCount = 0;
   for (const fx of list) {
-    if (!fx.address) continue;
-    await api("POST", `/api/floats/${fl.id}/flash`, { fixture_id: fx.id, seconds: 6 });
+    const b = fl.boxes.find(x => x.id === fx.box_id);
+    if (fx.uid && b && b.ip) {
+      try {
+        await api("POST", `/api/floats/${fl.id}/rdm`, { box_id: b.id, uid: fx.uid, action: "identify", on: true });
+        rdmCount++; continue;
+      } catch (e) { /* fall through to a DMX flash */ }
+    }
+    if (isLive(fl) && fx.address) {
+      await api("POST", `/api/floats/${fl.id}/flash`, { fixture_id: fx.id, seconds: 6 });
+      dmxCount++;
+    } else needLive.push(fx.label);
   }
-  toast("Flashing " + list.length + " for 6 seconds");
+  if (rdmCount || dmxCount) toast(`Identifying ${rdmCount + dmxCount}`, "ok");
+  if (needLive.length) toast(`Can't reach ${needLive.join(", ")}: Scan the box first, or go live.`, "bad");
 }
 
 function looksCard(fl) {
@@ -768,7 +781,6 @@ function lightCell(fl, fx, found, scanned) {
   return h("td", null, h("div", { class: "btn-row", style: { flexWrap: "nowrap" } },
     h("span", { style: { color: same ? "var(--ok)" : "var(--warn)", whiteSpace: "nowrap" }, title: d.label || d.uid },
       same ? "✓" : `at ${d.address} · M${d.mode}`),
-    h("button", { class: "btn tiny", onclick: () => rdmDo(fl, b, d, "identify", { on: true }) }, "Identify"),
     h("button", { class: "btn tiny ghost", title: "Light settings", onclick: () => paramsModal(fl, b, d) }, "⋯")));
 }
 
@@ -793,7 +805,7 @@ function fixtureTable(fl) {
         onchange: e => { const v = parseInt(e.target.value, 10); fx.address = isNaN(v) ? null : clamp(v, 1, 512); saveFloat(fl, true).then(() => renderMain()); } })),
       scanned ? lightCell(fl, fx, found, scanned) : null,
       h("td", null, h("div", { class: "btn-row", style: { flexWrap: "nowrap" } },
-        h("button", { class: "btn tiny", disabled: !fx.address, onclick: () => flashFixtures(fl, [fx]) }, "Flash"),
+        h("button", { class: "btn tiny", disabled: (!fx.address && !fx.uid) || null, onclick: () => flashFixtures(fl, [fx]) }, "Identify"),
         h("button", { class: "btn tiny ghost", title: "Remove", onclick: async () => {
           if (!(await confirmBox("Remove fixture?", `Remove ${fx.label}?`, "Remove", "danger"))) return;
           fl.fixtures = fl.fixtures.filter(x => x.id !== fx.id); delete fl.live[fx.id]; await saveFloat(fl, true); renderMain();
