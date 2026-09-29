@@ -79,7 +79,7 @@ app under Setup.
 - Multi-select lights in the Look tab, so several lights can be set together.
 - A "Parade" tab for floats that run on live DMX from show control
   instead of stand-alone.
-- A per-fixture Settings button in Scan results, for the maker's own
+- A per-fixture ⋯ button after a Scan, for the maker's own
   settings (like Terminator active).
 
 ## Known unknowns

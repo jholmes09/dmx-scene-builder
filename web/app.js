@@ -667,14 +667,18 @@ function renderPatch(body, fl) {
   for (const b of fl.boxes) boxes.append(boxRow(fl, b));
   body.append(boxes);
 
-  for (const b of fl.boxes) if (S.scan[b.id]) body.append(scanCard(fl, b, S.scan[b.id]));
-
   const fxCard = h("div", { class: "card" });
   fxCard.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Fixtures"),
     h("button", { class: "btn small", onclick: () => autoPatch(fl) }, "Auto-address"),
     h("button", { class: "btn small ghost icon", title: "Add fixture", onclick: () => { fl.fixtures.push({ id: "fx_" + uid8(), label: "New " + (fl.fixtures.length + 1), type_id: "", variant: "TW", mode: 11, box_id: fl.boxes[0] && fl.boxes[0].id, address: null, uid: null, notes: "" }); saveFloat(fl, true).then(() => renderMain()); } }, "+")));
   fxCard.append(problemsBox(fl));
   fxCard.append(h("div", { class: "tbl-wrap" }, fixtureTable(fl)));
+  fxCard.append(foundExtras(fl));
+  // Writing the patch to the real lights belongs after the patch is edited, not next to the scan results.
+  const sendable = fl.boxes.filter(b => S.scan[b.id] && (S.scan[b.id].devices || []).length);
+  if (sendable.length) fxCard.append(h("hr", { class: "rule" }), h("div", { class: "btn-row" },
+    sendable.map(b => h("button", { class: "btn small gold", onclick: () => pushAddresses(fl, b, S.scan[b.id]) },
+      "Send addresses to fixtures" + (fl.boxes.length > 1 ? " (" + b.name + ")" : "")))));
   body.append(fxCard);
 
   const more = h("div", { class: "card" });
@@ -738,9 +742,41 @@ function discoverResults(fl) {
   return wrap;
 }
 
+function scannedFor(fl) {
+  // uid -> {d, b} for every light the last scan of each box found
+  const out = {};
+  for (const b of fl.boxes) for (const d of ((S.scan[b.id] || {}).devices || [])) if (d.ok) out[d.uid] = { d, b };
+  return out;
+}
+
+async function rdmDo(fl, b, d, action, extra) {
+  try {
+    const r = await api("POST", `/api/floats/${fl.id}/rdm`, Object.assign({ box_id: b.id, uid: d.uid, action }, extra || {}));
+    if (r.info) Object.assign(d, { address: r.info.address, mode: r.info.mode, personality: r.info.personality });
+    if (action === "identify") toast(extra && extra.on === false ? "Stopped" : "Identifying for 15 s", "ok");
+    if (action === "address" || action === "mode") await reloadFloat(fl.id);
+    renderMain();
+  } catch (e) { toast(e.message, "bad"); }
+}
+
+function lightCell(fl, fx, found, scanned) {
+  if (!scanned) return h("td", { class: "muted" }, "–");
+  const hit = fx.uid && found[fx.uid];
+  if (!hit) return h("td", null, h("span", { style: { color: fx.uid ? "var(--bad)" : "var(--muted)" } }, fx.uid ? "not found" : "not linked"));
+  const { d, b } = hit;
+  const same = d.address === fx.address && d.mode === fx.mode;
+  return h("td", null, h("div", { class: "btn-row", style: { flexWrap: "nowrap" } },
+    h("span", { style: { color: same ? "var(--ok)" : "var(--warn)", whiteSpace: "nowrap" }, title: d.label || d.uid },
+      same ? "✓" : `at ${d.address} · M${d.mode}`),
+    h("button", { class: "btn tiny", onclick: () => rdmDo(fl, b, d, "identify", { on: true }) }, "Identify"),
+    h("button", { class: "btn tiny ghost", title: "Light settings", onclick: () => paramsModal(fl, b, d) }, "⋯")));
+}
+
 function fixtureTable(fl) {
+  const found = scannedFor(fl);
+  const scanned = fl.boxes.some(b => S.scan[b.id] && !S.scan[b.id].error);
   const t = h("table", { class: "tbl" });
-  t.append(h("tr", null, ["", "Fixture", "Type", "Mode", fl.boxes.length > 1 ? "Box" : null, "Address", ""].filter(x => x !== null).map(x => h("th", null, x))));
+  t.append(h("tr", null, ["", "Fixture", "Type", "Mode", fl.boxes.length > 1 ? "Box" : null, "Address", scanned ? "Light" : null, ""].filter(x => x !== null).map(x => h("th", null, x))));
   const errIds = new Set((fl.problems || []).filter(p => p.level === "error").map(p => p.fixture));
   fl.fixtures.forEach((fx) => {
     const st = stateOf(fl, fx);
@@ -754,7 +790,8 @@ function fixtureTable(fl) {
       h("td", null, h("select", { class: "f", style: { width: "96px" }, onchange: e => { fx.mode = parseInt(e.target.value, 10); saveFloat(fl, true).then(() => renderMain()); } }, modeOpts)),
       fl.boxes.length > 1 ? h("td", null, h("select", { class: "f", onchange: e => { fx.box_id = e.target.value; saveFloat(fl); } }, fl.boxes.map(b => h("option", { value: b.id, selected: b.id === fx.box_id }, b.name)))) : null,
       h("td", null, h("input", { class: "f num", type: "number", inputmode: "numeric", min: 1, max: 512, value: fx.address || "", placeholder: "–",
-        onchange: e => { const v = parseInt(e.target.value, 10); fx.address = isNaN(v) ? null : clamp(v, 1, 512); saveFloat(fl, true); } })),
+        onchange: e => { const v = parseInt(e.target.value, 10); fx.address = isNaN(v) ? null : clamp(v, 1, 512); saveFloat(fl, true).then(() => renderMain()); } })),
+      scanned ? lightCell(fl, fx, found, scanned) : null,
       h("td", null, h("div", { class: "btn-row", style: { flexWrap: "nowrap" } },
         h("button", { class: "btn tiny", disabled: !fx.address, onclick: () => flashFixtures(fl, [fx]) }, "Flash"),
         h("button", { class: "btn tiny ghost", title: "Remove", onclick: async () => {
@@ -765,12 +802,44 @@ function fixtureTable(fl) {
   return t;
 }
 
+function foundExtras(fl) {
+  // Scan errors, and lights the scan found that aren't matched to anything in the patch.
+  const wrap = h("div");
+  const linkedUids = new Set(fl.fixtures.map(f => f.uid).filter(Boolean));
+  for (const b of fl.boxes) {
+    const res = S.scan[b.id];
+    if (!res) continue;
+    const name = fl.boxes.length > 1 ? b.name + ": " : "";
+    if (res.error) { wrap.append(h("div", { class: "note bad", style: { marginTop: "10px" } }, name + res.error)); continue; }
+    const extra = res.devices.filter(d => d.ok && !linkedUids.has(d.uid));
+    if (!extra.length) continue;
+    const freeFx = fl.fixtures.filter(f => f.box_id === b.id && !f.uid);
+    wrap.append(h("div", { class: "note warn", style: { marginTop: "10px" } },
+      h("strong", null, `${name}${extra.length} light(s) not matched yet. Identify it, then say which fixture it is.`),
+      extra.map(d => {
+        const pick = h("select", { class: "f", style: { width: "auto" }, onchange: e => {
+          if (!e.target.value) return;
+          S.links[d.uid] = e.target.value;
+          applyScan(fl, b, { devices: [d] });
+        } },
+          h("option", { value: "" }, "This is…"),
+          freeFx.map(f => h("option", { value: f.id }, f.label)),
+          h("option", { value: "__new" }, "A new fixture"));
+        return h("div", { class: "btn-row", style: { marginTop: "8px" } },
+          h("span", { style: { flex: 1 } }, `${d.label || d.uid} · ch ${d.address} · Mode ${d.mode}`),
+          h("button", { class: "btn tiny", onclick: () => rdmDo(fl, b, d, "identify", { on: true }) }, "Identify"),
+          pick);
+      })));
+  }
+  return wrap;
+}
+
 async function autoPatch(fl) {
   const boxes = fl.boxes;
   const body = h("div");
   const start = h("input", { class: "f num", type: "number", value: 1, min: 1, max: 512 });
   const boxSel = h("select", { class: "f" }, boxes.map(b => h("option", { value: b.id }, b.name)));
-  body.append(h("p", null, "Gives every fixture on the box its own block of channels, top to bottom in the list, based on each fixture's mode. The new addresses still have to be sent to the fixtures: use Scan › Send addresses, or set them in REAP."),
+  body.append(h("p", null, "Gives every fixture on the box its own block of channels, top to bottom in the list, based on each fixture's mode. Then press Send addresses to fixtures at the bottom of the list."),
     h("div", { class: "form-row" }, boxes.length > 1 ? h("div", { class: "field" }, h("label", null, "Box"), boxSel) : null,
       h("div", { class: "field" }, h("label", null, "Start at"), start)));
   modal("Auto-address", body, [{ label: "Auto-address", cls: "gold", fn: async () => {
@@ -795,98 +864,20 @@ async function scanBox(fl, b) {
     const r = await api("POST", `/api/floats/${fl.id}/scan`, { box_id: b.id });
     S.scan[b.id] = r;
     const n = r.devices.length;
-    // Every light found matches exactly one patch fixture by address: link them without an extra tap.
-    const autoOk = n && r.devices.every(d => d.ok) && r.devices.every(d => {
-      const same = fl.fixtures.filter(f => f.box_id === b.id && (f.uid === d.uid || (f.address === d.address && !f.uid)));
-      return same.length === 1;
+    // Link every found light that matches exactly one unlinked patch fixture on this box by address.
+    const linkedUids = new Set(fl.fixtures.map(f => f.uid).filter(Boolean));
+    const auto = r.devices.filter(d => d.ok && !linkedUids.has(d.uid)).filter(d => {
+      const same = fl.fixtures.filter(f => f.box_id === b.id && !f.uid && f.address === d.address);
+      const rivals = r.devices.filter(x => x.ok && x.address === d.address);
+      if (same.length === 1 && rivals.length === 1) { S.links[d.uid] = same[0].id; return true; }
+      return false;
     });
-    if (autoOk) {
-      for (const d of r.devices) {
-        const fx = fl.fixtures.find(f => f.box_id === b.id && (f.uid === d.uid || f.address === d.address));
-        S.links[d.uid] = fx.id;
-      }
-      await applyScan(fl, b, r);
-    }
+    if (auto.length) await applyScan(fl, b, { devices: auto });
     toast(n ? `Found ${n} fixture(s) on ${b.name}` : `${b.name} answered but reported no fixtures`, n ? "ok" : "bad");
   } catch (e) {
     S.scan[b.id] = { error: e.message, devices: [] };
     toast(e.message, "bad");
   } finally { S._scanning = null; renderMain(); }
-}
-
-function scanCard(fl, b, res) {
-  const card = h("div", { class: "card" });
-  card.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, "Scan" + (fl.boxes.length > 1 ? ": " + b.name : "")),
-    res.devices.length ? h("button", { class: "btn small", title: "Pair unlinked scanned fixtures with unlinked patch fixtures, in address order", onclick: () => linkInOrder(fl, b, res) }, "Link in order") : null,
-    res.devices.length ? h("button", { class: "btn small gold", onclick: () => applyScan(fl, b, res) }, "Use scan") : null,
-    h("button", { class: "btn small ghost", onclick: () => { delete S.scan[b.id]; renderMain(); } }, "Hide")));
-  if (res.error) {
-    card.append(h("div", { class: "note bad" }, res.error),
-      h("p", { class: "hint" }, "No RDM reply. Use REAP or Robe Toolkit, then the Address finder."),
-      b.ip ? h("a", { class: "btn small", href: "http://" + b.ip, target: "_blank" }, "Open REAP") : null);
-    return card;
-  }
-  const byUid = Object.fromEntries(fl.fixtures.filter(f => f.uid).map(f => [f.uid, f]));
-  const counts = {};
-  res.devices.forEach(d => { if (d.address) counts[d.address] = (counts[d.address] || 0) + 1; });
-  const expected = fl.fixtures.filter(f => f.box_id === b.id).length;
-  card.append(h("div", { class: "note " + (res.devices.length === expected ? "ok" : "warn"), style: { marginBottom: "10px" } },
-    `Found ${res.devices.length} of ${expected}`,
-    Object.values(counts).some(c => c > 1) ? " · some share an address" : ""));
-  const t = h("table", { class: "tbl" }, h("tr", null, ["RDM UID", "Found as", "Address", "Mode", "Linked fixture", ""].map(x => h("th", null, x))));
-  for (const d of res.devices) {
-    if (!d.ok) { t.append(h("tr", { class: "err" }, h("td", { class: "uid" }, d.uid), h("td", { colspan: 5 }, d.error))); continue; }
-    const linked = byUid[d.uid];
-    const addr = h("input", { class: "f num", type: "number", min: 1, max: 512, value: d.address || "" });
-    const variant = d.variant_guess;
-    const avail = (d.modes_available && d.modes_available.length) ? d.modes_available : Object.keys(MODES[variant] || {}).map(Number);
-    const modeSel = h("select", { class: "f" }, avail.map(m => h("option", { value: m, selected: m === d.mode }, "Mode " + m + " (" + (((MODES[variant] || MODES.RGBW)[m] || {}).footprint || "?") + " ch)")));
-    if (!(d.uid in S.links)) {
-      // Back-end convenience: a scanned light whose address matches exactly one patch fixture on this box links itself.
-      const same = fl.fixtures.filter(f => f.box_id === b.id && f.address === d.address && !f.uid);
-      S.links[d.uid] = linked ? linked.id : (same.length === 1 ? same[0].id : "");
-    }
-    const cur = S.links[d.uid];
-    const linkSel = h("select", { class: "f", onchange: e => { S.links[d.uid] = e.target.value; } },
-      h("option", { value: "" }, "— not linked —"),
-      fl.fixtures.filter(f => f.box_id === b.id).map(f => h("option", { value: f.id, selected: cur === f.id }, f.label + (f.uid && f.uid !== d.uid ? " (linked elsewhere)" : ""))),
-      h("option", { value: "__new", selected: cur === "__new" }, "+ Add as new fixture"));
-    const doRdm = async (action, extra) => {
-      try {
-        const r = await api("POST", `/api/floats/${fl.id}/rdm`, Object.assign({ box_id: b.id, uid: d.uid, action }, extra || {}));
-        Object.assign(d, { address: r.info.address, mode: r.info.mode, personality: r.info.personality });
-        toast(action === "identify" ? "Identify sent" : "Done", "ok");
-        if (action === "address" || action === "mode") await reloadFloat(fl.id);
-        renderMain();
-      } catch (e) { toast(e.message, "bad"); }
-    };
-    t.append(h("tr", null,
-      h("td", null, h("div", { class: "uid" }, d.uid), d.label ? h("div", { style: { fontSize: "12px" } }, d.label) : null),
-      h("td", null, h("div", null, d.kind === "ebox" ? "E-Box itself" : variant === "RGBW" ? "RGB + White" : variant === "TW" ? "Tunable white" : "Single white"), h("div", { class: "muted", style: { fontSize: "11px" } }, d.model || "")),
-      h("td", null, h("div", { class: "btn-row", style: { flexWrap: "nowrap" } }, addr, h("button", { class: "btn tiny", onclick: () => doRdm("address", { address: parseInt(addr.value, 10) }) }, "Set")),
-        counts[d.address] > 1 ? h("div", { style: { color: "var(--warn)", fontSize: "11px" } }, "shared address") : null),
-      h("td", null, h("div", { class: "btn-row", style: { flexWrap: "nowrap" } }, modeSel, h("button", { class: "btn tiny", onclick: () => doRdm("mode", { mode: parseInt(modeSel.value, 10) }) }, "Set"))),
-      h("td", null, linkSel),
-      h("td", null, h("div", { class: "btn-row", style: { flexWrap: "nowrap" } },
-        h("button", { class: "btn tiny", onclick: () => doRdm("identify", { on: true }) }, "Identify"),
-        h("button", { class: "btn tiny ghost", onclick: () => doRdm("identify", { on: false }) }, "Stop"),
-        h("button", { class: "btn tiny ghost", title: "Manufacturer settings (RDM)", onclick: () => paramsModal(fl, b, d) }, "Settings")))));
-  }
-  card.append(h("div", { class: "tbl-wrap" }, t));
-  card.append(h("hr", { class: "rule" }),
-    h("div", { class: "btn-row" },
-      h("button", { class: "btn small", onclick: () => pushAddresses(fl, b, res) }, "Send addresses to fixtures")));
-  return card;
-}
-
-function linkInOrder(fl, b, res) {
-  const taken = new Set(Object.values(S.links).filter(Boolean));
-  const freeFx = fl.fixtures.filter(f => f.box_id === b.id && !taken.has(f.id) && (!f.uid || !res.devices.some(d => d.uid === f.uid)));
-  const devs = res.devices.filter(d => d.ok && !S.links[d.uid]).sort((a, c) => (a.address || 999) - (c.address || 999) || a.uid.localeCompare(c.uid));
-  let n = 0;
-  devs.forEach((d, i) => { if (freeFx[i]) { S.links[d.uid] = freeFx[i].id; n++; } });
-  renderMain();
-  toast(n ? `Paired ${n}. Check with Identify, then press Use scan for patch.` : "Nothing left to pair");
 }
 
 async function applyScan(fl, b, res) {
@@ -910,12 +901,12 @@ async function applyScan(fl, b, res) {
   }
   await saveFloat(fl, true);
   renderMain();
-  toast(`Linked ${linked}, added ${added}. Unlinked fixtures were left alone.`, "ok");
+  toast(added ? `Linked ${linked}, added ${added}` : `Linked ${linked}`, "ok");
 }
 
 async function pushAddresses(fl, b, res) {
   const todo = fl.fixtures.filter(f => f.box_id === b.id && f.uid && f.address && res.devices.some(d => d.uid === f.uid));
-  if (!todo.length) { toast("Link scanned fixtures to the patch first (Linked fixture column, then Use scan for patch).", "bad"); return; }
+  if (!todo.length) { toast("Scan first, so the app knows which light is which.", "bad"); return; }
   if (!(await confirmBox("Send addresses?", `Write address and mode to ${todo.length} fixture(s) on ${b.name}?`, "Send"))) return;
   let ok = 0; const errs = [];
   await api("POST", "/api/output", { action: "hold", on: true });
