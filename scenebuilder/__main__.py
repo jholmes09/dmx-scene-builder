@@ -15,7 +15,7 @@ from pathlib import Path
 from . import __version__
 from .node import ArtNetController, local_interfaces
 from .server import App, make_server
-from .store import Store
+from .store import Store, DEFAULT_DIR
 
 DEMO = Path(__file__).resolve().parent.parent / "data" / "demo_project.json"
 
@@ -24,7 +24,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="scenebuilder")
     ap.add_argument("--port", type=int, default=8080, help="web port (default 8080)")
     ap.add_argument("--artnet-port", type=int, default=6454)
-    ap.add_argument("--data", default=None, help="data folder (default ~/Library/Application Support/DMX Scene Builder)")
+    ap.add_argument("--data", default=None, help="data folder (default %s)" % DEFAULT_DIR)
     ap.add_argument("--sim", action="store_true", help="start with the virtual E-Box running")
     ap.add_argument("--sim-port", type=int, default=6455, help="UDP port for the virtual E-Box")
     ap.add_argument("--no-browser", action="store_true")
@@ -41,6 +41,11 @@ def main(argv=None):
         print("Loaded starting floats from %s." % seed.name)
 
     ctl = ArtNetController(port=args.artnet_port).start()
+    preferred_ip = store.data.get("network_interface")
+    if preferred_ip and preferred_ip not in {i["ip"] for i in local_interfaces()}:
+        print("Note: the saved network adapter (%s) isn't present right now; using Automatic instead." % preferred_ip)
+        preferred_ip = None
+    ctl.set_preferred_interface(preferred_ip)
     app = App(store, ctl, sim_port=args.sim_port)
     if args.sim:
         app.sim_on()
@@ -57,8 +62,8 @@ def main(argv=None):
     print("\n" + bar)
     print("  DMX SCENE BUILDER %s  by Jeff Holmes Presents" % __version__)
     print(bar)
-    print("  On this Mac:   http://localhost:%d" % args.port)
-    print("  On the iPad:   http://%s:%d" % (host, args.port))
+    print("  On this computer:  http://localhost:%d" % args.port)
+    print("  On the iPad:       http://%s:%d" % (host, args.port))
     for itf in local_interfaces():
         if not itf["ip"].startswith("127."):
             print("                 http://%s:%d   (%s)" % (itf["ip"], args.port, itf["name"]))

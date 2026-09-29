@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import platform
 import re
 import socket
 import struct
@@ -21,8 +22,17 @@ class RdmError(Exception):
     pass
 
 
-def local_interfaces() -> List[dict]:
-    """IPv4 interfaces from ifconfig (macOS/Linux). Each: name, ip, netmask, broadcast."""
+def _broadcast_for(ip: str, mask: str) -> Optional[str]:
+    try:
+        ipn = struct.unpack(">I", socket.inet_aton(ip))[0]
+        mn = struct.unpack(">I", socket.inet_aton(mask))[0]
+        return socket.inet_ntoa(struct.pack(">I", (ipn & mn) | (~mn & 0xFFFFFFFF)))
+    except OSError:
+        return None
+
+
+def _unix_interfaces() -> List[dict]:
+    """IPv4 interfaces from `ifconfig` (macOS/Linux). Each: name, ip, netmask, broadcast."""
     out = []
     try:
         text = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=3).stdout
@@ -41,21 +51,83 @@ def local_interfaces() -> List[dict]:
                 n = int(mask, 16)
                 mask = ".".join(str((n >> s) & 0xFF) for s in (24, 16, 8, 0))
             if not bcast and ip != "127.0.0.1":
-                ipn = struct.unpack(">I", socket.inet_aton(ip))[0]
-                mn = struct.unpack(">I", socket.inet_aton(mask))[0]
-                bcast = socket.inet_ntoa(struct.pack(">I", (ipn & mn) | (~mn & 0xFFFFFFFF)))
+                bcast = _broadcast_for(ip, mask)
             out.append({"name": name, "ip": ip, "netmask": mask, "broadcast": bcast})
     return out
 
 
+_MASK_OCTETS = {"0", "128", "192", "224", "240", "248", "252", "254", "255"}
+
+
+def _looks_like_mask(ip: str) -> bool:
+    parts = ip.split(".")
+    return len(parts) == 4 and all(p in _MASK_OCTETS for p in parts) and ip != "0.0.0.0"
+
+
+def _parse_ipconfig(text: str) -> List[dict]:
+    """Parse `ipconfig /all` text into [{name, ip, netmask, broadcast}, ...].
+
+    Tries the English field labels first (fast, exact). If that finds nothing, e.g. on a
+    non-English Windows install, falls back to a label-independent pass: every blank-line
+    separated block that has a header line ending in ':' and contains a plausible IPv4
+    address followed later by a plausible subnet mask is treated as an adapter."""
+    out = []
+    blocks = re.split(r"\r?\n(?=\S)", text)
+    for block in blocks:
+        first = block.splitlines()[0] if block else ""
+        m = re.match(r"^(.*? adapter .*?):\s*$", first, re.M)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        ip_m = re.search(r"IPv4 Address[.\s]*:\s*([\d.]+)", block)
+        mask_m = re.search(r"Subnet Mask[.\s]*:\s*([\d.]+)", block)
+        if ip_m and mask_m:
+            ip, mask = ip_m.group(1), mask_m.group(1)
+            out.append({"name": name, "ip": ip, "netmask": mask, "broadcast": _broadcast_for(ip, mask)})
+    if out:
+        return out
+    for block in blocks:
+        lines = block.splitlines()
+        first = lines[0] if lines else ""
+        if not re.match(r"^\S.*:\s*$", first):
+            continue  # adapter headers start at column 0 and end with a bare colon
+        ips = re.findall(r":\s*(\d{1,3}(?:\.\d{1,3}){3})\s*(?:\([^)]*\))?\s*$", block, re.M)
+        addr = next((x for x in ips if not _looks_like_mask(x) and not x.startswith("0.")), None)
+        mask = next((x for x in ips if _looks_like_mask(x)), None)
+        if addr and mask:
+            name = first.rstrip(": \t")
+            out.append({"name": name, "ip": addr, "netmask": mask, "broadcast": _broadcast_for(addr, mask)})
+    return out
+
+
+def _windows_interfaces() -> List[dict]:
+    """IPv4 interfaces from `ipconfig /all`. Each: name, ip, netmask, broadcast."""
+    try:
+        # cp437/oem encoding varies by locale; decode leniently rather than raise.
+        raw = subprocess.run(["ipconfig", "/all"], capture_output=True, timeout=3).stdout
+        text = raw.decode("oem", "replace") if isinstance(raw, bytes) else raw
+    except Exception:
+        return []
+    return _parse_ipconfig(text)
+
+
+def local_interfaces() -> List[dict]:
+    """This machine's IPv4 network adapters. Each: name, ip, netmask, broadcast."""
+    return _windows_interfaces() if platform.system() == "Windows" else _unix_interfaces()
+
+
 class ArtNetController:
     def __init__(self, bind_ip: str = "0.0.0.0", port: int = artnet.ARTNET_PORT, fps: float = 30.0):
-        self.bind_ip = bind_ip
+        # The listening socket always binds to 0.0.0.0 (see start()): binding to one adapter's
+        # unicast address stops the OS delivering broadcast replies to it on macOS/Linux, which
+        # would silently break discovery. `bind_ip` is kept only for tests / advanced callers.
+        self.bind_ip = bind_ip or "0.0.0.0"
         self.port = port
         self.fps = fps
         self.sock: Optional[socket.socket] = None
         self.bind_error: Optional[str] = None
         self._lock = threading.RLock()
+        self.preferred_interface: Optional[str] = None  # adapter IP to prefer for discovery, or None
         self._buffers: Dict[Target, bytearray] = {}
         self._seq: Dict[Target, int] = {}
         self.output_enabled = False
@@ -95,6 +167,14 @@ class ArtNetController:
         time.sleep(0.25)
         if self.sock:
             self.sock.close()
+
+    def set_preferred_interface(self, ip: Optional[str]):
+        """Prefer one adapter for discovery broadcasts (Setup > Network adapter). The listening
+        socket is unaffected: it always stays on 0.0.0.0 so replies are never missed, and unicast
+        sends to an already-known box IP are unaffected too (the OS routing table already gets
+        those right for a directly-connected subnet)."""
+        with self._lock:
+            self.preferred_interface = ip or None
 
     # ------------------------------------------------------------ sending
     def _send(self, data: bytes, ip: str, port: int) -> bool:
@@ -203,8 +283,12 @@ class ArtNetController:
         # Directed broadcast per interface (2.255.255.255 on a Robe-default Ethernet port);
         # 255.255.255.255 would only leave via the primary interface on macOS.
         dests = set()
+        preferred = self.preferred_interface
         for itf in local_interfaces():
-            if itf.get("broadcast") and not itf["ip"].startswith("127.") and not itf["ip"].startswith("169.254."):
+            if preferred and itf["ip"] != preferred:
+                continue  # a specific adapter is preferred: only broadcast on it
+            is_link_local = itf["ip"].startswith("169.254.")
+            if itf.get("broadcast") and not itf["ip"].startswith("127.") and (not is_link_local or itf["ip"] == preferred):
                 dests.add((itf["broadcast"], artnet.ARTNET_PORT))
         for t in extra_targets:
             dests.add((t[0], int(t[1])))

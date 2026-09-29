@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import platform
 import threading
 import time
 import uuid
@@ -12,7 +13,18 @@ from typing import Optional
 
 from . import fixtures
 
-DEFAULT_DIR = Path.home() / "Library" / "Application Support" / "DMX Scene Builder"
+
+def _default_dir() -> Path:
+    system = platform.system()
+    if system == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "DMX Scene Builder"
+    if system == "Windows":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return Path(base) / "DMX Scene Builder"
+    return Path.home() / ".dmx-scene-builder"  # Linux and anything else
+
+
+DEFAULT_DIR = _default_dir()
 SCHEMA = 1
 
 
@@ -62,6 +74,7 @@ class Store:
     def _migrate(self):
         self.data.setdefault("schema", SCHEMA)
         self.data.setdefault("floats", [])
+        self.data.setdefault("network_interface", None)  # pinned adapter IP, or None for automatic
         self.data.setdefault("palette", [])
         for fl in self.data["floats"]:
             fl.setdefault("looks", [])

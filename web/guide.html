@@ -100,9 +100,11 @@
       <li>Mac also joins the travel router's Wi-Fi</li>
       <li>Mac's Ethernet port connects by cable to the E-Box</li>
     </ul>
+    <div class="note">With a travel router (like a GL.iNet), leave the Mac's network adapter on "Using DHCP." The router hands out the address, which may not be 2.x.x.x. The static 2.0.0.10 setting below is only for connecting a cable straight from the Mac to the box, with no router.</div>
     <p>On the iPad, open Safari and go to the address shown in the DMX Scene Builder window on the Mac, something like <span class="mono">http://jeffs-macbook.local:8080</span> or <span class="mono">http://192.168.x.x:8080</span>.</p>
     <div class="note warn">Turn off "client isolation" (sometimes called "AP isolation") on the travel router's settings. If it's on, devices on the router can't see each other, and the iPad won't be able to reach the Mac.</div>
     <p>In Safari, tap the share icon and choose "Add to Home Screen." That gives you an icon that opens DMX Scene Builder full screen, like an app.</p>
+    <div class="note">If the computer has more than one active network connection (Wi-Fi and Ethernet, say), open <strong>Setup</strong> and pick which one to search on, under "Network adapter." If Find can't reach the box, this is usually why.</div>
     <h3>Fallback: no network needed</h3>
     <p>If the network setup is giving trouble, use <strong>Sidecar</strong> instead: the iPad becomes a second screen for the Mac, over its own cable or Wi-Fi connection to the Mac, with no router involved at all.</p>
   </div>
@@ -240,7 +242,8 @@
     <h2>Troubleshooting</h2>
     <table class="tt-table">
       <tr><th>Problem</th><th>Check</th></tr>
-      <tr><td>Nothing found</td><td>The cable is seated in the box's network port; the Mac's Ethernet IP is 2.0.0.10; the box's DMX Input is set to Ethernet and it's been power-cycled since; the box's IP shown in its Info menu.</td></tr>
+      <tr><td>Nothing found</td><td>The cable is seated in the box's network port; the computer and box are on the same network (Setup shows the computer's address); the box's DMX Input is set to Ethernet and it's been power-cycled since; the box's IP shown in its Info menu.</td></tr>
+      <tr><td>More than one network is active (Wi-Fi and Ethernet, or two adapters)</td><td>Setup &gt; Network adapter: pick the one connected to the box instead of Automatic.</td></tr>
       <tr><td>Found the box but lights don't respond</td><td>Net / Sub-Net / Universe mismatch between the box and the app; the box wasn't power-cycled after a settings change; the float isn't live; the Release button was pressed.</td></tr>
       <tr><td>"Port busy" shown in the status pill</td><td>Another lighting app is open. Quit it, then restart DMX Scene Builder.</td></tr>
       <tr><td>iPad can't load the page</td><td>Is it on the same Wi-Fi as the Mac? Is client isolation off on the router? Use the exact address shown in the DMX Scene Builder window. If nothing works, fall back to Sidecar.</td></tr>

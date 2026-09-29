@@ -298,7 +298,20 @@ class Handler(BaseHTTPRequestHandler):
                                "rev": store.data.get("rev", 0)})
         if p == ["network"] and method == "GET":
             return self._json({"interfaces": local_interfaces(), "http_port": self.server.server_address[1],
-                               "artnet_port": app.ctl.port, "bind_error": app.ctl.bind_error})
+                               "artnet_port": app.ctl.port, "bind_error": app.ctl.bind_error,
+                               "pinned_ip": app.ctl.preferred_interface})
+        if p == ["network", "interface"] and method == "POST":
+            ip = (self._body().get("ip") or "").strip() or None
+            if ip:
+                known = {i["ip"] for i in local_interfaces()}
+                if ip not in known:
+                    return self._err("That address isn't one of this machine's network adapters right now.")
+            # Only changes which adapter Find/Scan broadcasts on; live output is untouched.
+            app.ctl.set_preferred_interface(ip)
+            with store.lock:
+                store.data["network_interface"] = ip
+                store.mark_dirty()
+            return self._json({"interfaces": local_interfaces(), "pinned_ip": ip, "bind_error": app.ctl.bind_error})
         if p == ["discover"] and method == "POST":
             b = self._body()
             extra = [(t["ip"], int(t.get("udp_port") or 6454)) for t in b.get("targets", []) if t.get("ip")]

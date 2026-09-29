@@ -1,0 +1,16 @@
+Windows-IP-Konfiguration
+
+   Hostname  . . . . . . . . . . . : DESK-KOLLEGE
+   Primäres DNS-Suffix  . . . . . . :
+   Knotentyp . . . . . . . . . . . : Hybrid
+
+Ethernet-Adapter Ethernet:
+
+   Verbindungsspezifisches DNS-Suffix:
+   Beschreibung. . . . . . . . . . . : Realtek PCIe GbE Family Controller
+   Physische Adresse . . . . . . . . : AA-BB-CC-DD-EE-FF
+   DHCP aktiviert. . . . . . . . . . : Ja
+   IPv4-Adresse  . . . . . . . . . . : 10.248.31.62(Bevorzugt)
+   Subnetzmaske  . . . . . . . . . . : 255.255.255.0
+   Standardgateway . . . . . . . . . : 10.248.31.1
+   DHCP-Server . . . . . . . . . . . : 10.248.31.1

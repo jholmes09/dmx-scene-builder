@@ -1133,13 +1133,13 @@ async function openSetup() {
   const net = await api("GET", "/api/network");
   const port = net.http_port;
   const ifs = net.interfaces.filter(i => !i.ip.startsWith("127."));
-  const eth2 = ifs.find(i => i.ip.startsWith("2."));
   const body = h("div");
+  const pickWrap = h("div", { style: { margin: "10px 0" } });
   body.append(
     h("div", { class: "kicker small" }, "iPad address"),
     h("div", { style: { margin: "6px 0 12px" } }, ifs.map(i => h("div", { class: "mono", style: { fontSize: "17px", color: "var(--champagne)" } }, `http://${i.ip}:${port}`))),
-    eth2 ? null : h("div", { class: "note warn" }, "Mac isn't on the box network. Ethernet: IP 2.0.0.10, mask 255.0.0.0."),
     net.bind_error ? h("div", { class: "note bad", style: { marginTop: "8px" } }, "Art-Net port busy. Quit other lighting apps, then restart.") : null,
+    ifs.length > 1 ? pickWrap : null,
     h("div", { class: "btn-row", style: { marginTop: "14px" } },
       h("button", { class: "btn small " + (S.sim ? "go" : "off"), onclick: async () => { const r = await api("POST", "/api/sim", { on: !S.sim }); S.sim = r.sim; openSetup(); renderMain(); } }, S.sim ? "Simulator on" : "Simulator off"),
       h("button", { class: "btn small ghost", onclick: () => { $("#modalRoot").innerHTML = ""; addFloat(); } }, "+ Float"),
@@ -1154,7 +1154,26 @@ async function openSetup() {
       } })),
       h("a", { class: "btn small ghost", href: "/guide.html", target: "_blank" }, "Field guide")),
     h("p", { class: "hint", style: { marginTop: "14px" } }, `v${S.version}`));
+  if (ifs.length > 1) pickWrap.append(networkPicker(net, ifs));
   modal("Setup", body);
+}
+
+function networkPicker(net, ifs) {
+  const sel = h("select", { class: "f" },
+    h("option", { value: "", selected: !net.pinned_ip }, "Automatic (all adapters)"),
+    ifs.map(i => h("option", { value: i.ip, selected: i.ip === net.pinned_ip }, `${i.name} — ${i.ip}`)));
+  const wrap = h("div", null,
+    h("label", { style: { display: "block", marginBottom: "6px" } }, h("span", { class: "kicker small" }, "Network adapter")),
+    sel,
+    h("p", { class: "hint" }, "More than one is active on this computer. If Find can't reach the box, pick the one plugged into it."));
+  sel.onchange = async () => {
+    try {
+      await api("POST", "/api/network/interface", { ip: sel.value || null });
+      toast("Adapter changed", "ok");
+    } catch (e) { toast(e.message, "bad"); }
+    openSetup();
+  };
+  return wrap;
 }
 
 // ------------------------------------------------------------------ boot

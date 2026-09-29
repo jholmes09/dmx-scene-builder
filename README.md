@@ -1,6 +1,6 @@
 # DMX Scene Builder
 
-DMX Scene Builder is a small app that runs on a Mac and controls the lights on a
+DMX Scene Builder is a small app that runs on a Mac or a Windows PC and controls the lights on a
 parade float, one float at a time. You open it from an iPad in Safari. It
 talks to Anolis Calumma light fixtures through Anolis E-Box Remote boxes over
 a plain network cable, so you can pick colors and brightness for each float,
@@ -9,10 +9,17 @@ themselves so the float can run with nothing connected at the parade.
 
 ## Quick start
 
-1. Double-click **DMX Scene Builder.command** in this folder.
-2. A window opens and prints an address, something like
-   `http://jeffs-macbook.local:8080`.
-3. On the iPad, open that address in Safari.
+**Mac:** double-click **DMX Scene Builder.command** in this folder.
+**Windows:** double-click **DMX Scene Builder.bat**. If Windows has never run
+Python before, install it from python.org first (check "Add python.exe to
+PATH" during install), then double-click the .bat file again.
+
+Either way, a window opens and prints an address, something like
+`http://jeffs-laptop.local:8080`. On the iPad, open that address in Safari.
+
+If the computer has more than one active network connection, open the app's
+**Setup** and pick the right one under "Network adapter," so Art-Net goes out
+the adapter actually connected to the E-Box.
 
 See `web/guide.html` (the field guide, below) for the full setup, wiring, and
 on-site checklist.
@@ -85,6 +92,10 @@ app under Setup.
   current firmware is unverified.
 - Art-Net universe numbering (Net / Sub-Net / Universe) is assumed to match
   what the box's own menu shows. Confirm this on-site with a real box.
+- Windows support (`DMX Scene Builder.bat`, adapter detection via `ipconfig`)
+  is new and hasn't been run on a real Windows machine yet. The automated
+  tests cover the adapter-parsing logic with sample `ipconfig` output, but a
+  first real run should be checked before relying on it in the field.
 
 ## Show data stays local
 
