@@ -414,7 +414,7 @@ function renderLook(body, fl) {
       onInput: v => apply({ dim: v / 100 }),
     }));
     card.append(h("div", { class: "presets" },
-      [0, 25, 50, 75, 100].map(p => h("button", { onclick: () => { apply({ dim: p / 100 }); renderPanel(); } }, p === 0 ? "Off" : p + "%"))));
+      [0, 25, 50, 75, 80, 100].map(p => h("button", { onclick: () => { apply({ dim: p / 100 }); renderPanel(); } }, p === 0 ? "Off" : p + "%"))));
 
     const hasRGB = variants.has("RGBW");
     const rgbStates = chosen.filter(f => effVariant(f) === "RGBW").map(f => stateOf(fl, f));
