@@ -310,7 +310,7 @@ class StressBase(unittest.TestCase):
         """web/app.js #releaseBtn: the button reads 'Clear hold' when held, but sends
         'release' only if output is on, else 'resume'."""
         e = self.status()
-        return self.call("POST", "/api/output", {"action": "release" if e["output"] else "resume"})
+        return self.call("POST", "/api/output", {"action": "release" if (e["hold"] or e["output"]) else "resume"})
 
     def save(self, verify=False):
         return self.call("POST", "/api/floats/%s/save" % self.fid, {"fixture_ids": self.ids, "verify": verify})
@@ -328,6 +328,8 @@ class StressBase(unittest.TestCase):
         out = []
         for fx in self.float()["fixtures"]:
             m = self.box.mod(fx["uid"].split(":")[1])
+            if fx["address"] is None:
+                continue  # unknown after a failed change: the app doesn't drive it until a Scan fills it in
             if (m.mode, m.address) != (fx["mode"], fx["address"]):
                 out.append("%s: store Mode %s @%s, light Mode %s @%s" % (fx["label"], fx["mode"], fx["address"],
                                                                           m.mode, m.address))
@@ -386,7 +388,6 @@ class BoxOfflineTests(StressBase):
             self.assertEqual(m.saved_initial[0], 1)
         self.assert_idle()
 
-    # BUG P0: "Clear hold" sends action=resume while a Scan has output paused, so hold stays on (app.js:1435)
     def test_clear_hold_pressed_while_scan_runs(self):
         self.failed_apply_consistent()
         self.box.discover_delay = 0.4
@@ -407,7 +408,6 @@ class BoxOfflineTests(StressBase):
         self.wait_job() if s.code == 200 else None
         self.assertEqual(problems, [])
 
-    # BUG P0: a light that changed but lost its confirm is not recorded; Release + Go live then drives its Special channel (server.py:815-819)
     def test_box_drops_after_accepting_a_change(self):
         def hook(path, q, out):
             if path == "ds_setup_device" and q["uid"] == B:
@@ -428,7 +428,6 @@ class BoxOfflineTests(StressBase):
         self.call("POST", "/api/output", {"action": "release"})
         self.assertEqual(problems, [])
 
-    # BUG P1: Apply again from a held state drops hold for one frame (set_active clears hold before set_hold) (server.py:791-792, engine.py:71)
     def test_apply_again_keeps_output_dark(self):
         self.failed_apply_consistent()
         t_press = time.time()
@@ -439,7 +438,6 @@ class BoxOfflineTests(StressBase):
         lit = [f for f in early if any(f)]
         self.assertEqual(len(lit), 0, "%d non-zero frame(s) sent while 'held dark'" % len(lit))
 
-    # BUG P1: box dropping mid-apply (no answer) blocks the request 5 s per remaining light (server.py:804-819, reap.py:51)
     def test_box_unplugged_mid_apply_blocks_request(self):
         self.drop_after_first_confirm("blackhole")
         r = self.apply(timeout=40)
@@ -477,7 +475,6 @@ class BoxOfflineTests(StressBase):
         self.assert_idle()
         self.assertEqual(len(self.scan().body["devices"]), 4)
 
-    # BUG P2: Apply searches once; the box's search often misses a light, so Apply fails and holds dark (server.py:803; Scan retries at :107)
     def test_apply_survives_a_missed_light_in_discovery(self):
         self.box.drop_next = {B}
         r = self.apply()
@@ -531,7 +528,6 @@ class BoxOfflineTests(StressBase):
 
 # ---------------------------------------------------------------------------- 2. clicks and concurrency
 class ConcurrencyTests(StressBase):
-    # BUG P0: Go live (any iPad) during Apply clears the hold; stale patch bytes reach a light mid-change (engine.py:71, server.py:446)
     def test_go_live_during_apply(self):
         self.box.confirm_delay = 1.0
         ev = threading.Event()
@@ -559,15 +555,14 @@ class ConcurrencyTests(StressBase):
         self.box.after = lambda path, q, out: ev.set() if path == "ds_setup_device" else None
         t, out = self.bg(self.apply)
         self.assertTrue(ev.wait(20))
-        self.press_release_button()
+        r = self.press_release_button()
+        self.assertIn("being changed", r.error)   # refused mid-change instead of half-undoing it
         t.join(60)
         e = self.status()
         self.assertFalse(e["hold"])
-        self.assertFalse(e["output"])
         self.assertEqual(self.mismatches(), [])
         self.assert_idle()
 
-    # BUG P0: PUT float during Apply replaces the float dict; later write-backs land on the orphan, store no longer matches lights (server.py:784,910-922)
     def test_edit_float_during_apply(self):
         self.box.discover_delay = 0.4
         t, out = self.bg(self.apply)
@@ -576,7 +571,7 @@ class ConcurrencyTests(StressBase):
         fl["name"] = "Renamed on the other iPad"
         p = self.call("PUT", "/api/floats/" + self.fid, fl)
         t.join(60)
-        self.assertEqual(p.code, 200, p)
+        self.assertEqual(p.code, 409, p)        # refused while its lights are being changed
         self.assertTrue(out["r"].body["ok"], out["r"])
         self.check_special = False              # reported below
         problems = ["store != lights: %s" % m for m in self.mismatches()]
@@ -641,7 +636,6 @@ class ConcurrencyTests(StressBase):
         self.assertIn("fl_other", [f["id"] for f in self.call("GET", "/api/project").body["floats"]])
 
 
-    # BUG P2: the web server's listen backlog is 5; a burst of taps/polls from two iPads gets "connection reset" (server.py:993-1000)
     def test_burst_of_requests(self):
         res = []
         ts = [threading.Thread(target=lambda: res.append(self.call("GET", "/api/status"))) for _ in range(16)]
@@ -677,7 +671,6 @@ class SaveTests(StressBase):
         self.assertEqual([self.sim.last_dmx[m.address - 1] for m in self.sim.modules], [0, 0, 0, 0])
         self.assert_idle()
 
-    # BUG P1: Save with the box unreachable runs and reports "done" though nothing was saved (server.py:598-603)
     def test_save_with_box_offline_is_not_reported_done(self):
         self.assertTrue(self.apply().body["ok"])
         self.go_live()
@@ -705,7 +698,6 @@ class RestartTests(StressBase):
         self.assertTrue(self.apply().body["ok"])
         self.assertEqual(self.mismatches(), [])
 
-    # BUG P2: light changes are written to disk up to 1 s later; a crash in that window loses them (server.py:922, store.py:197)
     def test_writeback_reaches_disk_before_apply_returns(self):
         st = self.srv.store
         st.flush()

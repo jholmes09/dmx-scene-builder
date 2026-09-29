@@ -1445,7 +1445,7 @@ async function boot() {
   $("#setupBtn").onclick = openSetup;
   $("#releaseBtn").onclick = async () => {
     const wasHold = S.engine.hold, wasLive = S.engine.output;
-    const r = await api("POST", "/api/output", { action: S.engine.output ? "release" : "resume" });
+    const r = await api("POST", "/api/output", { action: (S.engine.hold || S.engine.output) ? "release" : "resume" });
     S.engine = r.engine; renderStatus(); renderRail(); renderFloatHead();
     if (wasHold) toast("Hold cleared. Press Go live to send your look again.", "ok");
     else if (wasLive) toast("Stopped sending. The box keeps the last look (DMX Hold). Use Blackout to go dark.");

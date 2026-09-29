@@ -55,20 +55,22 @@ class Engine:
         self._paused_for_rdm = 0
         self._resume_after_rdm = False
         self.hold = False                         # send all-zero universes (fixtures being re-moded/re-addressed)
+        self.applying: Optional[str] = None       # float id while modes/addresses are being written to lights
         self.blackout = False
         self.job: Optional[dict] = None
         self._stop = threading.Event()
         threading.Thread(target=self._loop, name="engine", daemon=True).start()
 
     # ------------------------------------------------------------ output control
-    def set_active(self, fid: Optional[str], output: bool = True):
+    def set_active(self, fid: Optional[str], output: bool = True, keep_hold: bool = False):
         with self.lock:
             self.active_float = fid
             self.flash.clear()
             self.special.clear()
             self.dark.clear()
             self.sweep = None
-            self.hold = False
+            if not keep_hold:
+                self.hold = False
             self.white_test = None
             want = bool(fid) and output
             if self._paused_for_rdm:
@@ -112,7 +114,7 @@ class Engine:
                     "job": dict(self.job) if self.job else None,
                     "sweep": {k: v for k, v in self.sweep.items() if k != "target"} if self.sweep else None,
                     "white_test": self.white_test,
-                    "paused_for_rdm": self._paused_for_rdm > 0, "hold": self.hold,
+                    "paused_for_rdm": self._paused_for_rdm > 0, "hold": self.hold, "applying": bool(self.applying),
                     "packets_sent": self.ctl.packets_sent, "packets_received": self.ctl.packets_received,
                     "bind_error": self.ctl.bind_error, "send_error": self.ctl.last_send_error,
                     "artnet_port": self.ctl.port}
@@ -253,6 +255,8 @@ class Engine:
             if not ok:
                 raise RuntimeError("None of the selected fixtures are in Mode 7 with an address. "
                                    "Switch them to Mode 7 first (Addressing tab, or REAP).")
+            if self.applying:
+                raise RuntimeError("Lights are being changed right now. Wait for that to finish.")
             if self.hold:
                 raise RuntimeError("Output is held dark because the last address or mode change didn't finish. Press Clear hold (top right), then try again.")
             if self._paused_for_rdm:

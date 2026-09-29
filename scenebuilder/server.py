@@ -81,6 +81,17 @@ class App:
                 app.scan_lock.release()
         return _S()
 
+    def artnet_alive(self, ip: str, port: int, wait: float = 0.8) -> bool:
+        """Does a box answer an Art-Net poll sent straight to it?"""
+        t0 = time.time()
+        self.ctl._send_quiet(artnet.build_poll(), ip, port)
+        while time.time() - t0 < wait:
+            time.sleep(0.05)
+            with self.ctl._lock:
+                if any(n.get("ip") == ip and n.get("seen", 0) >= t0 - 0.01 for n in self.ctl.nodes.values()):
+                    return True
+        return False
+
     def personality_map(self, ip, port, pa, uid, info) -> dict:
         key = (ip, info["model_id"], info["personality_count"])
         if key in self.personalities:
@@ -110,6 +121,17 @@ class App:
                         break
             devs = list(found.values())
             self.reap_devices[ip] = {reap_uid_str(d["d_uid"]): d for d in devs}
+            # A light left "unknown" (address cleared) by a failed change gets its real values back.
+            with self.store.lock:
+                for fx in fl["fixtures"]:
+                    d = self.reap_devices[ip].get(fx.get("uid") or "")
+                    if d is not None and fx.get("box_id") == box_id and fx.get("address") is None:
+                        fx["address"] = int(d.get("dmx_a", 0)) + 1
+                        m = int(d.get("dmx_p") or 1)
+                        if m in fixtures.MODES.get(fx["variant"], {}) or m == fixtures.SAVE_MODE:
+                            fx["mode"] = m
+                        fl["rev"] = fl.get("rev", 0) + 1
+                        self.store.bump(fl)
             devices = [reap_scan_entry(d) for d in sorted(devs, key=lambda d: d.get("dmx_a", 0))]
             return {"box_id": box_id, "ip": ip, "port_address": pa, "devices": devices, "via": "box web page",
                     "time": time.time()}
@@ -443,6 +465,8 @@ class Handler(BaseHTTPRequestHandler):
         if p == ["output"] and method == "POST":
             b = self._body()
             action = b.get("action")
+            if eng.applying and action in ("activate", "resume", "release", "white_test", "hold"):
+                raise RuntimeError("Lights are being changed right now. Wait for that to finish.")
             if action == "activate":
                 eng.set_active(b.get("float_id"), output=True)
             elif action == "release":
@@ -482,6 +506,8 @@ class Handler(BaseHTTPRequestHandler):
         if p == ["project"] and method == "GET":
             return self._json(store.snapshot())
         if p == ["project"] and method == "PUT":
+            if eng.applying:
+                raise RuntimeError("Lights are being changed right now. Try again in a moment.")
             eng.set_active(None)
             store.replace_project(self._body())
             eng.refresh()
@@ -490,6 +516,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(store.plan_merge(self._body()))
         if p == ["project", "merge_apply"] and method == "POST":
             b = self._body()
+            if eng.applying and (b.get("resolutions") or {}).get(eng.applying) == "theirs":
+                raise RuntimeError("Lights on that float are being changed right now. Try again in a moment.")
             if eng.active_float and (b.get("resolutions") or {}).get(eng.active_float) == "theirs":
                 eng.release()  # the other computer's patch may not match these lights
             res = store.apply_merge(b.get("incoming") or {}, b.get("resolutions") or {})
@@ -515,6 +543,8 @@ class Handler(BaseHTTPRequestHandler):
             if not rest and method == "GET":
                 return self._json(fl)
             if not rest and method == "PUT":
+                if eng.applying == fid:
+                    return self._err("Lights on this float are being changed right now. Try again in a moment.", 409)
                 b = self._body()
                 with store.lock:
                     if "rev" in b and b["rev"] != fl.get("rev", 0):
@@ -598,7 +628,11 @@ class Handler(BaseHTTPRequestHandler):
                 for box in fl["boxes"]:  # a box on "Play saved look" ignores the app: saving would do nothing
                     if box.get("ip") and not b.get("verify"):
                         reap = Reap(box["ip"])
-                        if reap.available() and reap.other_settings().get("ic_od") == "disabled":
+                        if not reap.available():
+                            if not self.app.artnet_alive(box["ip"], int(box.get("udp_port") or 6454)):
+                                raise RuntimeError("%s isn't answering. Check its cable and power, then try again." % box["name"])
+                            continue  # answers Art-Net but has no web page (other gear, simulator)
+                        if reap.other_settings().get("ic_od") == "disabled":
                             raise RuntimeError("%s is on 'Play saved look'. Switch it back to app control first." % box["name"])
                 return self._json(eng.start_save(fid, b.get("fixture_ids", []), bool(b.get("verify"))))
         raise KeyError("no such endpoint")
@@ -757,6 +791,7 @@ class Handler(BaseHTTPRequestHandler):
             elif act != "info":
                 raise ValueError("unknown RDM action")
         app.engine.refresh()
+        app.store.flush()
         info = {"address": int(dev.get("dmx_a", 0)) + 1, "mode": int(dev.get("dmx_p") or 1),
                 "personality": int(dev.get("dmx_p") or 1)}
         return self._json({"ok": True, "uid": b["uid"], "info": info, "rev": app.store.data.get("rev", 0)})
@@ -786,10 +821,14 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("No lights to change. Scan the box first so the app knows which light is which.")
         if not app.scan_lock.acquire(timeout=3):
             raise RuntimeError("Busy talking to the box. Try again in a moment.")
+        if eng.applying or (eng.job and eng.job.get("state") == "running"):
+            app.scan_lock.release()
+            raise RuntimeError("Busy. Try again in a moment.")
         done, errors = [], []
         try:
-            eng.set_active(fl["id"], output=True)
-            eng.set_hold(True)
+            eng.applying = fl["id"]
+            eng.hold = True                               # zeros from the very first frame...
+            eng.set_active(fl["id"], output=True, keep_hold=True)   # ...then go live (still held)
             time.sleep(0.4)  # let a few all-zero frames reach the box
             for box in fl["boxes"]:
                 mine = [fid for fid in targets if by_id[fid].get("box_id") == box["id"]]
@@ -800,8 +839,17 @@ class Handler(BaseHTTPRequestHandler):
                     errors.append("%s: the box's web page didn't answer." % box["name"])
                     continue
                 cache = app.reap_devices.setdefault(box["ip"], {})
-                cache.update({reap_uid_str(d["d_uid"]): d for d in reap.discover(timeout=20)})  # fresh values
-                for fid in mine:
+                want = {by_id[fid]["uid"] for fid in mine}
+                try:
+                    for _ in range(2):  # the box's search sometimes misses a light
+                        cache.update({reap_uid_str(d["d_uid"]): d for d in reap.discover(timeout=20)})
+                        if want <= set(cache):
+                            break
+                except ReapError as e:
+                    errors.append("%s: %s" % (box["name"], e))
+                    continue
+                failed, box_gone = [], False
+                for n, fid in enumerate(mine):
                     fx = by_id[fid]
                     addr, mode = targets[fid]
                     dev = cache.get(fx["uid"])
@@ -816,12 +864,38 @@ class Handler(BaseHTTPRequestHandler):
                         reap.setup(reap_uid(fx["uid"]), (dev.get("u_l") or "").strip(), addr, mode, dev)
                     except ReapError as e:
                         errors.append("%s: %s" % (fx["label"], e))
+                        failed.append(fx)
+                        if "Can't reach" in str(e):  # the box is gone: don't wait on every remaining light
+                            box_gone = True
+                            for rest_fid in mine[n + 1:]:
+                                errors.append("%s: skipped, the box stopped answering." % by_id[rest_fid]["label"])
+                                failed.append(by_id[rest_fid])
+                            break
                         continue
                     dev["dmx_a"], dev["dmx_p"] = addr - 1, mode
                     self._write_back(fl, fx["uid"], address=addr, mode=mode)
                     done.append(fx["label"])
+                if failed:
+                    # A light whose change wasn't confirmed may or may not have switched. Ask the box
+                    # what it really is now; if it can't say, forget that light's address so the app
+                    # never drives it with a guessed layout (it shows as unaddressed until re-scanned).
+                    actual = {}
+                    try:
+                        if not box_gone and reap.available():
+                            actual = {reap_uid_str(d["d_uid"]): d for d in reap.discover(timeout=15)}
+                            cache.update(actual)
+                    except ReapError:
+                        actual = {}
+                    for fx in failed:
+                        d = actual.get(fx["uid"])
+                        if d is not None:
+                            self._write_back(fl, fx["uid"], address=int(d.get("dmx_a", 0)) + 1, mode=int(d.get("dmx_p") or 1))
+                        else:
+                            self._write_back(fl, fx["uid"], address=None)
         finally:
+            eng.applying = None
             app.scan_lock.release()
+            store.flush()  # the lights already changed: get it on disk now, not up to a second later
         if not errors:
             eng.set_hold(False)
         return {"ok": not errors, "done": done, "errors": errors, "held": bool(errors)}
@@ -911,13 +985,14 @@ class Handler(BaseHTTPRequestHandler):
         """Keep the patch in step with the hardware the moment an RDM change succeeds."""
         store = self.app.store
         with store.lock:
+            fl = store.get_float(fl["id"]) or fl
             for fx in fl["fixtures"]:
                 if fx.get("uid") == uid_s:
                     if "mode" in fields:
                         if fields["mode"] in fixtures.MODES.get(fx["variant"], {}) or fields["mode"] == fixtures.SAVE_MODE:
                             fx["mode"] = fields["mode"]
                     if "address" in fields:
-                        fx["address"] = fields["address"]
+                        fx["address"] = fields["address"]  # None = unknown: the light isn't driven until re-scanned
             fl["rev"] = fl.get("rev", 0) + 1
             store.bump(fl)
 
@@ -992,9 +1067,9 @@ def _autopatch_core(fl, box_id, start, fixture_ids=None, gap=0):
 
 def make_server(app: App, host: str = "0.0.0.0", port: int = 8080) -> ThreadingHTTPServer:
     handler = type("BoundHandler", (Handler,), {"app": app})
-    server_cls = ThreadingHTTPServer
+    server_cls = type("FieldServer", (ThreadingHTTPServer,), {"request_queue_size": 64})
     if platform.system() == "Windows":  # don't let a second copy share the web port silently
-        server_cls = type("ExclusiveServer", (ThreadingHTTPServer,), {"allow_reuse_address": False})
+        server_cls = type("ExclusiveServer", (server_cls,), {"allow_reuse_address": False})
     srv = server_cls((host, port), handler)
     srv.daemon_threads = True
     return srv

@@ -100,7 +100,7 @@ class Reap:
             time.sleep(0.2)
         raise ReapError("The box's device search didn't finish within %d s." % timeout)
 
-    def _wait_setup(self, d_uid: str, timeout: float = 15.0) -> dict:
+    def _wait_setup(self, d_uid: str, timeout: float = 8.0) -> dict:
         """Wait for the box to confirm a change to *this* light (ignore leftovers for others)."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
