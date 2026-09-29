@@ -168,7 +168,7 @@ class InterfaceApiTests(unittest.TestCase):
         self.assertEqual(r["pinned_ip"], "127.0.0.1")
         self.assertEqual(self.app.ctl.preferred_interface, "127.0.0.1")
         with self.store.lock:
-            self.assertEqual(self.store.data["network_interface"], "127.0.0.1")
+            self.assertEqual(self.store.settings["network_interface"], "127.0.0.1")
         r2 = self.api.call("GET", "/api/network")
         self.assertEqual(r2["pinned_ip"], "127.0.0.1")
         r3 = self.api.call("POST", "/api/network/interface", {"ip": None})

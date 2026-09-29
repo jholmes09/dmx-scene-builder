@@ -41,7 +41,7 @@ def main(argv=None):
         print("Loaded starting floats from %s." % seed.name)
 
     ctl = ArtNetController(port=args.artnet_port).start()
-    preferred_ip = store.data.get("network_interface")
+    preferred_ip = store.settings.get("network_interface")
     if preferred_ip and preferred_ip not in {i["ip"] for i in local_interfaces()}:
         print("Note: the saved network adapter (%s) isn't present right now; using Automatic instead." % preferred_ip)
         preferred_ip = None

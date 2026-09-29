@@ -1195,6 +1195,7 @@ async function openSetup() {
         } catch (err) { toast("Couldn't read that file: " + err.message, "bad"); }
       } })),
       h("a", { class: "btn small ghost", href: "/guide.html", target: "_blank" }, "Field guide")),
+    saveInfo(),
     h("p", { class: "hint", style: { marginTop: "14px" } }, `v${S.version}`));
   if (ifs.length > 1) pickWrap.append(networkPicker(net, ifs));
   modal("Setup", body);
@@ -1209,15 +1210,18 @@ async function startMerge(incoming) {
     return;
   }
   const resolutions = {};
-  for (const c of plan.conflicts) resolutions[c.id] = "mine";  // safest default: leave it alone
+  // Default to whichever copy was edited more recently; the user can flip any of them.
+  for (const c of plan.conflicts) resolutions[c.id] = (c.theirs.updated || 0) > (c.mine.updated || 0) ? "theirs" : "mine";
+  const when = (x) => x.updated ? new Date(x.updated * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) + (x.edited_on ? " · " + x.edited_on : "") : "no edit time";
   const body = h("div");
   if (plan.new.length) body.append(h("div", { class: "note ok" }, `Add ${plan.new.length}: ` + plan.new.map(f => f.name).join(", ")));
   if (plan.identical.length) body.append(h("p", { class: "hint" }, `${plan.identical.length} already match.`));
   if (plan.conflicts.length) {
-    body.append(h("div", { class: "kicker small", style: { marginTop: "12px" } }, "These differ. Keep which?"));
+    body.append(h("div", { class: "kicker small", style: { marginTop: "12px" } }, "Changed on both. Newer one is picked:"));
     for (const c of plan.conflicts) {
-      const mineBtn = h("button", { class: "on" }, `This computer (${c.mine.fixtures})`);
-      const theirsBtn = h("button", null, `The file (${c.theirs.fixtures})`);
+      const pickTheirs = resolutions[c.id] === "theirs";
+      const mineBtn = h("button", { class: pickTheirs ? "" : "on" }, `This computer · ${when(c.mine)}`);
+      const theirsBtn = h("button", { class: pickTheirs ? "on" : "" }, `The file · ${when(c.theirs)}`);
       mineBtn.onclick = () => { resolutions[c.id] = "mine"; mineBtn.className = "on"; theirsBtn.className = ""; };
       theirsBtn.onclick = () => { resolutions[c.id] = "theirs"; theirsBtn.className = "on"; mineBtn.className = ""; };
       body.append(h("div", { style: { margin: "8px 0" } }, h("div", null, (c.code ? c.code + " " : "") + c.name),
@@ -1232,6 +1236,26 @@ async function startMerge(incoming) {
       toast(`Added ${r.added}, replaced ${r.replaced}`, "ok");
     } catch (e) { toast(e.message, "bad"); return true; }
   } }]);
+}
+
+function saveInfo() {
+  const wrap = h("div", { style: { marginTop: "16px" } }, h("div", { class: "kicker small" }, "Saving"));
+  api("GET", "/api/settings").then(st => {
+    const ago = (t) => t ? Math.max(0, Math.round(Date.now() / 1000 - t)) + " s ago" : "not yet";
+    const input = h("input", { class: "f", value: st.mirror_dir || "", placeholder: "Folder path, e.g. ~/Dropbox/Show backups" });
+    wrap.append(
+      h("p", { class: "hint", style: { margin: "4px 0" } }, "Every change saves on this computer within a second. Last save: " + ago(st.last_saved) + "."),
+      h("div", { class: "mono", style: { fontSize: "12px", color: "var(--muted)", wordBreak: "break-all" } }, st.data_file),
+      h("div", { class: "field", style: { marginTop: "10px" } }, h("label", null, "Backup copy folder"),
+        h("div", { class: "btn-row", style: { flexWrap: "nowrap" } }, input,
+          h("button", { class: "btn small", onclick: async () => {
+            try { await api("POST", "/api/settings", { mirror_dir: input.value }); toast("Backup folder set", "ok"); openSetup(); }
+            catch (e) { toast(e.message, "bad"); }
+          } }, "Set"))),
+      st.mirror_error ? h("div", { class: "note bad" }, "Backup copy failed: " + st.mirror_error)
+        : st.mirror_dir ? h("p", { class: "hint" }, "Copies here every 30 s. Last copy: " + ago(st.last_mirrored) + ".") : null);
+  }).catch(() => {});
+  return wrap;
 }
 
 function networkPicker(net, ifs) {

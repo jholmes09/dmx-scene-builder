@@ -165,7 +165,7 @@ class Engine:
                 cur = dict(fl["live"].get(fx_id) or fixtures.DEFAULT_STATE)
                 cur.update(st)
                 fl["live"][fx_id] = fixtures.normalize_state(cur, effective_variant(ids[fx_id]))
-            self.store.mark_dirty()
+            self.store.mark_dirty(fl)
         if fid == self.active_float:
             self.refresh()
 

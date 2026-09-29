@@ -65,3 +65,52 @@ class MergeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StampAndBackupTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tmp.name))
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def test_edit_stamps_float_and_merge_ignores_stamps(self):
+        fl = make("A", "Alpha")
+        self.store.put_float(fl)
+        self.assertGreater(fl["updated"], 0)
+        self.assertTrue(fl["edited_on"])
+        twin = copy.deepcopy(fl)
+        twin["updated"] = 1  # same content, different stamp: not a conflict
+        plan = self.store.plan_merge({"floats": [twin]})
+        self.assertEqual(len(plan["identical"]), 1)
+
+    def test_plan_reports_which_copy_is_newer(self):
+        fl = make("A", "Alpha")
+        self.store.put_float(fl)
+        theirs = copy.deepcopy(fl)
+        theirs["fixtures"][0]["address"] = 7
+        theirs["updated"] = fl["updated"] + 100
+        c = self.store.plan_merge({"floats": [theirs]})["conflicts"][0]
+        self.assertGreater(c["theirs"]["updated"], c["mine"]["updated"])
+
+    def test_backup_copy_written_and_settings_not_in_project(self):
+        mirror = Path(self.tmp.name) / "mirror"
+        mirror.mkdir()
+        self.store.save_settings(mirror_dir=str(mirror), network_interface="10.0.0.5")
+        self.store.put_float(make("A", "Alpha"))
+        self.store.flush()
+        files = list(mirror.glob("DMX Scene Builder - *.json"))
+        self.assertEqual(len(files), 1)
+        import json as _j
+        data = _j.loads(files[0].read_text())
+        self.assertEqual(len(data["floats"]), 1)
+        self.assertNotIn("network_interface", data)   # per-computer settings never travel with the project
+
+    def test_missing_backup_folder_reports_error_not_crash(self):
+        self.store.save_settings(mirror_dir=str(Path(self.tmp.name) / "nope"))
+        self.store.put_float(make("A", "Alpha"))
+        self.store.flush()
+        self.assertIn("not found", self.store.mirror_error or "")
+        self.assertTrue(self.store.path.exists())      # main save still happened

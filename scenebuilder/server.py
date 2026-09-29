@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import logging
 import mimetypes
 import threading
@@ -352,9 +353,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._err("That address isn't one of this machine's network adapters right now.")
             # Only changes which adapter Find/Scan broadcasts on; live output is untouched.
             app.ctl.set_preferred_interface(ip)
-            with store.lock:
-                store.data["network_interface"] = ip
-                store.mark_dirty()
+            store.save_settings(network_interface=ip)
             return self._json({"interfaces": local_interfaces(), "pinned_ip": ip, "bind_error": app.ctl.bind_error})
         if p == ["discover"] and method == "POST":
             b = self._body()
@@ -370,11 +369,21 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 app.sim_off()
             return self._json({"sim": app.sim.state() if app.sim else None})
+        if p == ["settings"] and method == "GET":
+            return self._json(self._settings_view())
         if p == ["settings"] and method == "POST":
             b = self._body()
             if "pause_during_rdm" in b:
                 app.pause_during_rdm = bool(b["pause_during_rdm"])
-            return self._json({"pause_during_rdm": app.pause_during_rdm})
+            if "mirror_dir" in b:
+                d = (b.get("mirror_dir") or "").strip() or None
+                if d:
+                    d = os.path.expanduser(d)
+                    if not os.path.isdir(d):
+                        raise ValueError("That folder doesn't exist on this computer: %s" % d)
+                store.save_settings(mirror_dir=d)
+                store.flush()
+            return self._json(self._settings_view())
         if p == ["output"] and method == "POST":
             b = self._body()
             action = b.get("action")
@@ -452,19 +461,19 @@ class Handler(BaseHTTPRequestHandler):
                     look = {"id": new_id("lk"), "name": (b.get("name") or "Look").strip()[:60],
                             "created": time.time(), "states": json.loads(json.dumps(fl["live"]))}
                     fl["looks"].append(look)
-                    store.bump()
+                    store.bump(fl)
                 return self._json(look)
             if len(rest) == 3 and rest[0] == "looks" and rest[2] == "recall" and method == "POST":
                 with store.lock:
                     look = next(l for l in fl["looks"] if l["id"] == rest[1])
                     fl["live"] = json.loads(json.dumps(look["states"]))
-                    store.mark_dirty()
+                    store.mark_dirty(fl)
                 eng.refresh()
                 return self._json({"ok": True})
             if len(rest) == 2 and rest[0] == "looks" and method == "DELETE":
                 with store.lock:
                     fl["looks"] = [l for l in fl["looks"] if l["id"] != rest[1]]
-                    store.bump()
+                    store.bump(fl)
                 return self._json({"ok": True})
             if len(rest) == 2 and rest[0] == "looks" and method == "PUT":
                 b = self._body()
@@ -474,7 +483,7 @@ class Handler(BaseHTTPRequestHandler):
                         look["name"] = str(b["name"]).strip()[:60] or look["name"]
                     if b.get("overwrite"):
                         look["states"] = json.loads(json.dumps(fl["live"]))
-                    store.mark_dirty()
+                    store.mark_dirty(fl)
                 return self._json(look)
             if rest == ["flash"] and method == "POST":
                 eng.flash_fixture(self._body()["fixture_id"], float(self._body().get("seconds", 6)))
@@ -657,6 +666,14 @@ class Handler(BaseHTTPRequestHandler):
                 "personality": int(dev.get("dmx_p") or 1)}
         return self._json({"ok": True, "uid": b["uid"], "info": info, "rev": app.store.data.get("rev", 0)})
 
+    def _settings_view(self):
+        st = self.app.store
+        mp = st.mirror_path()
+        return {"pause_during_rdm": self.app.pause_during_rdm, "data_file": str(st.path),
+                "backups_dir": str(st.dir / "backups"), "last_saved": st.last_saved,
+                "mirror_dir": st.settings.get("mirror_dir"), "mirror_file": str(mp) if mp else None,
+                "last_mirrored": st.last_mirrored, "mirror_error": st.mirror_error}
+
     def _box_action(self, fl, b):
         """Box-wide settings through its web page: read them, or switch Output data."""
         ip, _, _ = self.app.box_target(fl, b["box_id"])
@@ -742,7 +759,7 @@ class Handler(BaseHTTPRequestHandler):
                     if "address" in fields:
                         fx["address"] = fields["address"]
             fl["rev"] = fl.get("rev", 0) + 1
-            store.bump()
+            store.bump(fl)
 
     def _patch_sheet(self, fid):
         from .patchsheet import render_patch_sheet
@@ -793,7 +810,7 @@ def autopatch(store, fl, box_id, start, fixture_ids=None, gap=0):
             changed.append({"id": fx["id"], "address": addr})
             addr += fp + max(0, gap)
         fl["rev"] = fl.get("rev", 0) + 1
-        store.bump()
+        store.bump(fl)
     return {"changed": changed}
 
 

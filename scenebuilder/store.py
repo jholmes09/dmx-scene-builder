@@ -5,6 +5,7 @@ import copy
 import json
 import os
 import platform
+import socket
 import threading
 import time
 import uuid
@@ -59,9 +60,23 @@ class Store:
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / "backups").mkdir(exist_ok=True)
         self.path = self.dir / "project.json"
+        self.settings_path = self.dir / "settings.json"
         self.lock = threading.RLock()
         self._dirty = False
         self._last_backup = 0.0
+        self._last_mirror = 0.0
+        self._mirror_pending = False
+        self.mirror_error: Optional[str] = None
+        self.last_saved = 0.0
+        self.last_mirrored = 0.0
+        # Per-computer settings (never exported with the project): pinned adapter, backup folder.
+        self.settings = {"network_interface": None, "mirror_dir": None}
+        if self.settings_path.exists():
+            try:
+                with open(self.settings_path) as f:
+                    self.settings.update(json.load(f))
+            except (OSError, ValueError):
+                pass
         if self.path.exists():
             with open(self.path) as f:
                 self.data = json.load(f)
@@ -74,7 +89,14 @@ class Store:
     def _migrate(self):
         self.data.setdefault("schema", SCHEMA)
         self.data.setdefault("floats", [])
-        self.data.setdefault("network_interface", None)  # pinned adapter IP, or None for automatic
+        if "network_interface" in self.data:  # moved to per-computer settings
+            legacy = self.data.pop("network_interface")
+            if legacy and not self.settings.get("network_interface"):
+                self.settings["network_interface"] = legacy
+                try:
+                    _atomic_write(self.settings_path, json.dumps(self.settings, indent=1))
+                except OSError:
+                    pass
         self.data.setdefault("palette", [])
         for fl in self.data["floats"]:
             fl.setdefault("looks", [])
@@ -86,27 +108,50 @@ class Store:
                 b.setdefault("udp_port", 6454)
 
     # ---------------------------------------------------------- persistence
-    def bump(self):
+    def touch(self, fl: Optional[dict]):
+        """Stamp a float as edited now, on this computer. Import uses it to tell which copy is newer."""
+        if fl is not None:
+            fl["updated"] = time.time()
+            fl["edited_on"] = HOSTNAME
+
+    def bump(self, fl: Optional[dict] = None):
         """Structural change (patch, looks, palette): other devices reload when this changes."""
         with self.lock:
             self.data["rev"] = int(self.data.get("rev", 0)) + 1
-            self.mark_dirty()
+            self.mark_dirty(fl)
 
-    def mark_dirty(self):
+    def mark_dirty(self, fl: Optional[dict] = None):
         with self.lock:
+            self.touch(fl)
             self.data["updated"] = time.time()
             self._dirty = True
 
+    def save_settings(self, **changes):
+        with self.lock:
+            self.settings.update(changes)
+            _atomic_write(self.settings_path, json.dumps(self.settings, indent=1))
+            if "mirror_dir" in changes:
+                self._last_mirror = 0.0
+                self._mirror_pending = True
+
+    def mirror_path(self) -> Optional[Path]:
+        d = self.settings.get("mirror_dir")
+        return Path(d) / ("DMX Scene Builder - %s.json" % HOSTNAME) if d else None
+
     def flush(self):
         with self.lock:
-            if not self._dirty:
+            if not self._dirty and not self._mirror_pending:
                 return
             snapshot = json.dumps(self.data, indent=1)
+            wrote_main = self._dirty
             self._dirty = False
-        tmp = self.path.with_suffix(".tmp")
-        with open(tmp, "w") as f:
-            f.write(snapshot)
-        os.replace(tmp, self.path)
+        if wrote_main:
+            _atomic_write(self.path, snapshot)  # temp file + fsync + rename: a crash can't leave half a file
+            self.last_saved = time.time()
+            self._mirror_pending = True
+        self._mirror(snapshot)
+        if not wrote_main:
+            return
         now = time.time()
         if now - self._last_backup > 60:  # at most one backup a minute, keep 100
             self._last_backup = now
@@ -116,6 +161,24 @@ class Store:
             backups = sorted((self.dir / "backups").glob("project-*.json"))
             for old in backups[:-100]:
                 old.unlink()
+
+    def _mirror(self, snapshot: str, force: bool = False):
+        """Copy the project to the backup folder (e.g. Dropbox) at most every 30 s."""
+        target = self.mirror_path()
+        if not target or not self._mirror_pending:
+            return
+        if not force and time.time() - self._last_mirror < 30:
+            return
+        try:
+            if not target.parent.is_dir():
+                raise OSError("folder not found: %s" % target.parent)
+            _atomic_write(target, snapshot)
+            self._last_mirror = self.last_mirrored = time.time()
+            self._mirror_pending = False
+            self.mirror_error = None
+        except OSError as e:
+            self._last_mirror = time.time()  # retry in 30 s, don't spin
+            self.mirror_error = str(e)
 
     def _saver(self):
         while not self._stop.wait(1.0):
@@ -129,6 +192,9 @@ class Store:
         self._stop.set()
         self.mark_dirty()
         self.flush()
+        with self.lock:
+            snapshot = json.dumps(self.data, indent=1)
+        self._mirror(snapshot, force=True)
 
     # ---------------------------------------------------------- access
     def snapshot(self) -> dict:
@@ -158,6 +224,7 @@ class Store:
 
     def put_float(self, fl: dict) -> dict:
         validate_float(fl)
+        self.touch(fl)
         with self.lock:
             for i, old in enumerate(self.data["floats"]):
                 if old["id"] == fl["id"]:
@@ -237,11 +304,24 @@ class Store:
 def _float_summary(fl: dict) -> dict:
     return {"id": fl.get("id"), "code": fl.get("code", ""), "name": fl.get("name", ""),
             "fixtures": len(fl.get("fixtures") or []), "boxes": len(fl.get("boxes") or []),
-            "looks": len(fl.get("looks") or [])}
+            "looks": len(fl.get("looks") or []), "updated": fl.get("updated") or 0,
+            "edited_on": fl.get("edited_on") or ""}
+
+
+def _atomic_write(path: Path, text: str):
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+HOSTNAME = socket.gethostname().split(".")[0]
 
 
 def _floats_equal(a: dict, b: dict) -> bool:
-    strip = lambda f: {k: v for k, v in f.items() if k != "rev"}
+    strip = lambda f: {k: v for k, v in f.items() if k not in ("rev", "updated", "edited_on")}
     return json.dumps(strip(a), sort_keys=True) == json.dumps(strip(b), sort_keys=True)
 
 
