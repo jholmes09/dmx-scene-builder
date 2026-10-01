@@ -17,6 +17,11 @@ SETTLE_S = 1.5
 VCW_WHITES = {1800: 1, 2700: 3, 3200: 5, 4200: 7, 5600: 9, 6500: 11}  # Mode 7 virtual colour wheel presets
 
 
+# method: (r, g, b, w, use CTC)
+TW_PROBES = {7: (255, 0, 0, 0, False), 8: (0, 255, 0, 0, False), 9: (0, 0, 255, 0, False),
+             10: (0, 0, 0, 255, False), 11: (255, 255, 255, 255, True), 12: (0, 0, 0, 255, True)}
+
+
 def white_test_bytes(method: int, k: int, mix=None) -> bytes:
     """Mode 7 frame for comparing white methods on RGB + cool-white Calumma (dimmer ~60%)."""
     ctc = fixtures.kelvin_to_ctc(k)
@@ -37,6 +42,10 @@ def white_test_bytes(method: int, k: int, mix=None) -> bytes:
     elif method == 6 and mix:  # tune by eye
         r, g, b, w = (int(round(max(0.0, min(1.0, x)) * 255)) for x in mix)
         ctc = 0
+    # 7-12: tunable-white lights in Mode 7 (undocumented by Robe): find which channel does what
+    elif method in TW_PROBES:
+        r, g, b, w, use_ctc = TW_PROBES[method]
+        ctc = ctc if use_ctc else 0
     # special r rf g gf b bf w wf gc ctc vcw shutter dim dimf
     return bytes([0, r, 0, g, 0, b, 0, w, 0, 128, ctc, vcw, 255, 153, 0])
 
@@ -197,7 +206,8 @@ class Engine:
                             data[i] = 128
                     data = bytes(data)
                 wt = self.white_test
-                if wt and effective_variant(fx) == "RGBW" and fx["mode"] == fixtures.SAVE_MODE:
+                if (wt and effective_variant(fx) == "RGBW" and fx["mode"] == fixtures.SAVE_MODE
+                        and (wt["method"] in TW_PROBES) == (fx["variant"] == "TW")):
                     data = white_test_bytes(wt["method"], wt["k"], wt.get("mix"))
                 a = fx["address"] - 1
                 buf = out[key]

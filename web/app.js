@@ -1268,7 +1268,8 @@ async function openSetup() {
         } catch (err) { toast("Couldn't read that file: " + err.message, "bad"); }
       } })),
       h("a", { class: "btn small ghost", href: "/guide.html", target: "_blank" }, "Field guide"),
-      h("button", { class: "btn small ghost", onclick: () => { $("#modalRoot").innerHTML = ""; whiteTest(); } }, "White test")),
+      h("button", { class: "btn small ghost", onclick: () => { $("#modalRoot").innerHTML = ""; whiteTest(); } }, "White test"),
+      h("button", { class: "btn small ghost", onclick: () => { $("#modalRoot").innerHTML = ""; twTest(); } }, "Tunable white test")),
     saveInfo(),
     h("p", { class: "hint", style: { marginTop: "14px" } }, `v${S.version}`));
   if (ifs.length > 1) pickWrap.append(networkPicker(net, ifs));
@@ -1404,6 +1405,29 @@ function whiteTest() {
       const r = await api("POST", "/api/white_cal", { reset_all: true }); S.project.white_cal = r.white_cal;
       await api("POST", "/api/output", { action: "white_test", method: null }); toast("All whites back to the fixture's own", "ok"); } },
     { label: "Stop test", fn: async () => { await api("POST", "/api/output", { action: "white_test", method: null }); } }]);
+}
+
+function twTest() {
+  // Tunable-white lights in Mode 7 aren't documented by Robe: light one channel at a time to learn what each does.
+  const fl = curFloat();
+  if (!fl || !isLive(fl) || !fl.fixtures.some(f => f.variant === "TW" && f.mode === 7)) {
+    toast("Go live on a float with tunable white lights in Mode 7 first.", "bad"); return; }
+  let method = 7, k = 3000;
+  const names = { 7: "Red channel only", 8: "Green channel only", 9: "Blue channel only", 10: "White channel only",
+    11: "All four + color temp channel (what the app does now)", 12: "White channel + color temp channel" };
+  const body = h("div");
+  const send = () => { api("POST", "/api/output", { action: "white_test", method, k }).catch(e => toast(e.message, "bad")); draw(); };
+  const draw = () => {
+    body.innerHTML = "";
+    body.append(
+      h("div", { class: "seg", style: { margin: "6px 0 4px" } }, [7, 8, 9, 10, 11, 12].map(n => h("button", { class: n === method ? "on" : "", onclick: () => { method = n; send(); } }, String(n - 6)))),
+      h("p", { style: { margin: "4px 0 14px", fontWeight: 600 } }, (method - 6) + ": " + names[method]));
+    if (method >= 11) body.append(h("div", { class: "kicker small" }, "Color temperature"),
+      h("div", { class: "seg", style: { marginTop: "6px" } }, [2700, 3200, 4200, 5600, 6500].map(x => h("button", { class: x === k ? "on" : "", onclick: () => { k = x; send(); } }, x + "K"))));
+    body.append(h("p", { class: "hint" }, "For each step, tell Claude: off, warm, cool, or mixed. For 5 and 6, does the color change between 2700K and 6500K?"));
+  };
+  send();
+  modal("Tunable white test", body, [{ label: "Stop test", fn: async () => { await api("POST", "/api/output", { action: "white_test", method: null }); } }]);
 }
 
 function networkPicker(net, ifs) {
