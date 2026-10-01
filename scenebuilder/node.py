@@ -111,9 +111,28 @@ def _windows_interfaces() -> List[dict]:
     return _parse_ipconfig(text)
 
 
+def _ip_cmd_interfaces() -> List[dict]:
+    """Linux without ifconfig: parse `ip -4 -o addr` ("2: eth0    inet 10.0.0.5/24 brd 10.0.0.255 ...")."""
+    out = []
+    try:
+        text = subprocess.run(["ip", "-4", "-o", "addr"], capture_output=True, text=True, timeout=3).stdout
+    except Exception:
+        return out
+    for line in text.splitlines():
+        m = re.search(r"^\d+:\s+(\S+)\s+inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)", line)
+        if not m:
+            continue
+        name, ip, bits = m.group(1), m.group(2), int(m.group(3))
+        mask = socket.inet_ntoa(struct.pack(">I", (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF if bits else 0))
+        out.append({"name": name, "ip": ip, "netmask": mask, "broadcast": None if ip.startswith("127.") else _broadcast_for(ip, mask)})
+    return out
+
+
 def local_interfaces() -> List[dict]:
     """This machine's IPv4 network adapters. Each: name, ip, netmask, broadcast."""
-    return _windows_interfaces() if platform.system() == "Windows" else _unix_interfaces()
+    if platform.system() == "Windows":
+        return _windows_interfaces()
+    return _unix_interfaces() or _ip_cmd_interfaces()
 
 
 def _hosts(ip: str, mask: str, limit: int = 1022) -> List[str]:

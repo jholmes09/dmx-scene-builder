@@ -61,6 +61,9 @@ class WindowsParserTests(unittest.TestCase):
 class DefaultDirTests(unittest.TestCase):
     def test_current_platform_dir(self):
         d = str(_default_dir())
+        if platform.system() == "Linux":
+            self.assertIn(".dmx-scene-builder", d)
+            return
         self.assertIn("DMX Scene Builder", d)
         if platform.system() == "Darwin":
             self.assertIn("Application Support", d)

@@ -326,13 +326,25 @@ def _float_summary(fl: dict) -> dict:
             "edited_on": fl.get("edited_on") or ""}
 
 
+_WRITE_LOCK = threading.Lock()
+
+
 def _atomic_write(path: Path, text: str):
-    tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    """Temp file + fsync + rename, one writer at a time; a unique temp name so two saves can't collide."""
+    with _WRITE_LOCK:
+        tmp = path.with_name("%s.%s.tmp" % (path.name, uuid.uuid4().hex[:8]))
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        finally:
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
 
 
 HOSTNAME = socket.gethostname().split(".")[0]
