@@ -166,20 +166,31 @@ class InterfaceApiTests(unittest.TestCase):
         self.assertIn("adapter", r.get("error", ""))
         self.assertIsNone(self.app.ctl.preferred_interface)
 
+    def test_real_adapters_are_found(self):
+        # On a real Windows/Mac/Linux machine (CI runs all three) the adapter reader must find something.
+        from scenebuilder.node import local_interfaces
+        self.assertTrue(local_interfaces(), "no network adapters found on %s" % platform.system())
+
+    def _an_adapter(self):
+        from scenebuilder.node import local_interfaces
+        ips = [i["ip"] for i in local_interfaces()]
+        return "127.0.0.1" if "127.0.0.1" in ips else ips[0]  # Windows' ipconfig doesn't list loopback
+
     def test_pin_and_persist(self):
-        r = self.api.call("POST", "/api/network/interface", {"ip": "127.0.0.1"})
-        self.assertEqual(r["pinned_ip"], "127.0.0.1")
-        self.assertEqual(self.app.ctl.preferred_interface, "127.0.0.1")
+        ip = self._an_adapter()
+        r = self.api.call("POST", "/api/network/interface", {"ip": ip})
+        self.assertEqual(r["pinned_ip"], ip, r)
+        self.assertEqual(self.app.ctl.preferred_interface, ip)
         with self.store.lock:
-            self.assertEqual(self.store.settings["network_interface"], "127.0.0.1")
+            self.assertEqual(self.store.settings["network_interface"], ip)
         r2 = self.api.call("GET", "/api/network")
-        self.assertEqual(r2["pinned_ip"], "127.0.0.1")
+        self.assertEqual(r2["pinned_ip"], ip)
         r3 = self.api.call("POST", "/api/network/interface", {"ip": None})
         self.assertIsNone(r3["pinned_ip"])
 
     def test_pin_never_touches_live_output(self):
         self.app.engine.ctl.output_enabled = True
-        self.api.call("POST", "/api/network/interface", {"ip": "127.0.0.1"})
+        self.api.call("POST", "/api/network/interface", {"ip": self._an_adapter()})
         self.assertTrue(self.app.ctl.output_enabled)   # unlike the earlier rebind design
         self.app.engine.ctl.output_enabled = False
         self.api.call("POST", "/api/network/interface", {"ip": None})
