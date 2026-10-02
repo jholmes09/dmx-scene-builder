@@ -1197,11 +1197,12 @@ function renderSave(body, fl) {
 
   body.append(step(3, "Save it into the lights",
     h("div", { class: "btn-row" },
-      h("button", { class: "btn gold big", disabled: !ready.length || busy || null, onclick: () => runSave(fl, ready, false) }, `Save look (${ready.length})`),
-      h("button", { class: "btn", disabled: !ready.length || busy || null, onclick: () => runSave(fl, ready, true) }, "Check saved look")),
+      h("button", { class: "btn gold big", disabled: !ready.length || busy || null, onclick: () => runSave(fl, ready, false) }, `Save look (${ready.length})`)),
     jobBox()));
+  // No "check" over DMX: the lights' "show saved values" command shows nothing on the real Calumma
+  // (field test 2026-10-02). Play saved look (step 4) is the only true check.
 
-  const boxCard = step(4, "Play it on its own", h("div", { id: "boxOut" }, h("p", { class: "hint" }, "Reading the box…")));
+  const boxCard = step(4, "Play it on its own (this is the check)", h("div", { id: "boxOut" }, h("p", { class: "hint" }, "Reading the box…")));
   body.append(boxCard);
   refreshBoxOut(fl);
 }
