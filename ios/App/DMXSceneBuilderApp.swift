@@ -35,7 +35,14 @@ final class AppCore {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         do {
             let store = try Store(directory: docs)
-            let ctl = ArtNetController(port: ArtNet.port).start()
+            var artnetPort = ArtNet.port
+            #if DEBUG
+            // Simulator testing against tools/ios_fakebox.py (never in a Release build).
+            let env = ProcessInfo.processInfo.environment
+            if let p = env["REAP_WEB_PORT"].flatMap(Int.init) { Reap.webPort = p }
+            if let p = env["ARTNET_PORT"].flatMap(Int.init) { artnetPort = p }
+            #endif
+            let ctl = ArtNetController(port: artnetPort).start()
             let web = Bundle.main.url(forResource: "web", withExtension: nil)
             return .success(AppCore(store: store, ctl: ctl, api: API(store: store, ctl: ctl, webRoot: web)))
         } catch {

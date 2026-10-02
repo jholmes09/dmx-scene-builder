@@ -53,7 +53,7 @@ final class EndToEndTests: XCTestCase {
     func refused(_ method: String, _ path: String, _ body: JSON?, _ contains: String, file: StaticString = #filePath, line: UInt = #line) {
         let (s, j) = call(method, path, body)
         XCTAssertNotEqual(s, 200, "\(method) \(path) should be refused", file: file, line: line)
-        XCTAssertTrue(j["error"].pyStr.contains(contains), "error was: \(j["error"].pyStr)", file: file, line: line)
+        XCTAssertTrue(contains.isEmpty || j["error"].pyStr.contains(contains), "error was: \(j["error"].pyStr)", file: file, line: line)
     }
 
     func waitFor(_ timeout: Double = 5, _ cond: () -> Bool) -> Bool {

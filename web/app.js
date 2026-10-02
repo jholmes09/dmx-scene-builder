@@ -1298,7 +1298,7 @@ async function openSetup() {
   const body = h("div");
   const pickWrap = h("div", { style: { margin: "10px 0" } });
   const wifi = net.wifi;
-  body.append(
+  body.append(...[
     NATIVE ? h("div", { class: "kicker small" }, "Wi-Fi") : h("div", { class: "kicker small" }, "iPad address"),
     NATIVE ? h("div", { class: "mono", style: { margin: "6px 0 12px", fontSize: "17px", color: "var(--champagne)" } }, wifi ? `${wifi.ip} (mask ${wifi.netmask})` : "Not connected. Join the venue Wi-Fi.")
       : h("div", { style: { margin: "6px 0 12px" } }, ifs.map(i => h("div", { class: "mono", style: { fontSize: "17px", color: "var(--champagne)" } }, `http://${i.ip}:${port}`))),
@@ -1321,7 +1321,7 @@ async function openSetup() {
       h("button", { class: "btn small ghost", onclick: () => { $("#modalRoot").innerHTML = ""; whiteTest(); } }, "White test"),
       h("button", { class: "btn small ghost", onclick: () => { $("#modalRoot").innerHTML = ""; twTest(); } }, "Tunable white test")),
     saveInfo(),
-    h("p", { class: "hint", style: { marginTop: "14px" } }, `v${S.version}`));
+    h("p", { class: "hint", style: { marginTop: "14px" } }, `v${S.version}`)].filter(Boolean));  // DOM append would print "null"
   if (ifs.length > 1 && !NATIVE) pickWrap.append(networkPicker(net, ifs));
   modal("Setup", body);
 }
@@ -1368,10 +1368,10 @@ function saveInfo() {
   api("GET", "/api/settings").then(st => {
     const ago = (t) => t ? Math.max(0, Math.round(Date.now() / 1000 - t)) + " s ago" : "not yet";
     if (NATIVE) {
-      wrap.append(
+      wrap.append(...[
         h("p", { class: "hint", style: { margin: "4px 0" } }, "Every change saves on this iPad within a second. Last save: " + ago(st.last_saved) + "."),
         st.save_error ? h("div", { class: "note bad" }, "Saving failed: " + st.save_error) : null,
-        h("p", { class: "hint" }, "Files app › On My iPad › DMX Scene Builder holds the project and its backups. Press Export to send a copy to a Mac, iCloud Drive or a colleague."));
+        h("p", { class: "hint" }, "Files app › On My iPad › DMX Scene Builder holds the project and its backups. Press Export to send a copy to a Mac, iCloud Drive or a colleague.")].filter(Boolean));
       return;
     }
     wrap.append(

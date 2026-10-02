@@ -45,6 +45,21 @@ a float to it, go to that float's Patch tab and set a box's IP address to
 python3 -m unittest discover -s tests -t .
 ```
 
+## iPad app (no laptop)
+
+`ios/` is a native iPad app that runs everything on the iPad: the same web UI
+(bundled from `web/` at build time) plus a Swift port of the engine, store and
+box control. Join the venue Wi-Fi, open the app, and it finds the E-Boxes by
+asking every address on the Wi-Fi's subnet. Open `ios/DMXSceneBuilder.xcodeproj`
+in Xcode, pick your Team under Signing & Capabilities, and run it on the iPad.
+The project file and backups are in the Files app under On My iPad >
+DMX Scene Builder; use Setup > Export / Import to move floats between the
+Mac and the iPad.
+
+Tests: `tools/ios_test.sh` builds the app and runs its Swift tests on an iPad
+simulator against a fake E-Box. After changing the Python core, run
+`python3 tools/make_golden.py` so the Swift port is checked against it.
+
 ## Layout of the code
 
 - `scenebuilder/artnet.py`: builds and reads the Art-Net network packets (the

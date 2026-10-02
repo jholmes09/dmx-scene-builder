@@ -133,6 +133,7 @@ final class MainViewController: UIViewController, WKUIDelegate, WKNavigationDele
     func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let cmd = body["cmd"] as? String else { return }
         if cmd == "export" { exportProject() }
+        if cmd == "log" { NSLog("DMXSB page: %@", String(describing: body["text"] ?? "")) }
     }
 
     private func exportProject() {
@@ -173,6 +174,15 @@ final class MainViewController: UIViewController, WKUIDelegate, WKNavigationDele
         a.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
         a.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
         present(a, animated: true)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        #if DEBUG
+        // Simulator smoke tests drive the real page through its real fetch path (never in Release).
+        if let js = ProcessInfo.processInfo.environment["AUTOTEST_JS"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { webView.evaluateJavaScript(js, completionHandler: nil) }
+        }
+        #endif
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
