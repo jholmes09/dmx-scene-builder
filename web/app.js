@@ -24,6 +24,15 @@ function h(tag, attrs, ...kids) {
 }
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const uid8 = () => Math.random().toString(16).slice(2, 10);
+// The iPad app (ios/) runs this same page inside itself and sets window.NATIVE_APP before it loads.
+// Then the "server" is the app itself: no Mac, no simulator, no adapter picker, no backup folder.
+const NATIVE = !!window.NATIVE_APP;
+const HOST = NATIVE ? "the app" : "the Mac";
+const HERE = NATIVE ? "this iPad" : "this computer";
+const prefs = {  // localStorage, but never fatal (some web views refuse it)
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* ignore */ } },
+};
 
 async function api(method, path, body) {
   // Every request gives up eventually, so one lost on flaky Wi-Fi can't freeze the page.
@@ -38,7 +47,7 @@ async function api(method, path, body) {
       body: body !== undefined ? JSON.stringify(body) : undefined, signal: ctl.signal,
     });
   } catch (e) {
-    throw new Error(e.name === "AbortError" ? "The Mac didn't answer in time. Try again." : "Can't reach the Mac: " + e.message);
+    throw new Error(e.name === "AbortError" ? `${HOST[0].toUpperCase() + HOST.slice(1)} didn't answer in time. Try again.` : `Can't reach ${HOST}: ` + e.message);
   } finally { clearTimeout(timer); }
   let data = null;
   try { data = await r.json(); } catch (e) { /* ignore */ }
@@ -160,8 +169,8 @@ function footprint(fx) { return MODES_ROLES(fx).length || 0; }
 // ------------------------------------------------------------------ app state
 const S = {
   project: null, engine: {}, sim: null, settings: {}, version: "",
-  floatId: localStorage.getItem("fl.float") || null,
-  tab: localStorage.getItem("fl.tab") || "look",
+  floatId: prefs.get("fl.float") || null,
+  tab: prefs.get("fl.tab") || "look",
   sel: new Set(),
   patchSel: new Set(),  // fixtures ticked on the Patch tab for bulk edits
   rev: 0,            // project structure revision (patch/looks/palette); other devices' edits bump it
@@ -247,7 +256,7 @@ function renderStatus() {
   const live = S.project && S.project.floats.find(f => f.id === e.active_float);
   pill.className = "status-pill";
   if (e.bind_error) { pill.classList.add("warn"); txt.textContent = "Port busy"; pill.title = e.bind_error; }
-  else if (e.output && e.send_error) { pill.classList.add("warn"); txt.textContent = "Can't reach box"; pill.title = e.send_error + ". Check the cable and the Mac's Ethernet IP (Setup)."; }
+  else if (e.output && e.send_error) { pill.classList.add("warn"); txt.textContent = "Can't reach box"; pill.title = e.send_error + (NATIVE ? ". Check the iPad is on the venue Wi-Fi." : ". Check the cable and the Mac's Ethernet IP (Setup)."); }
   else if (e.output && live) { pill.classList.add("live"); txt.textContent = "Live · " + (live.code || live.name); pill.title = "Sending to " + live.name; }
   else if (S.sim) { pill.classList.add("sim"); txt.textContent = "Simulator on"; pill.title = "Virtual E-Box is running"; }
   else { txt.textContent = "Not sending"; pill.title = "Nothing is being sent to the boxes"; }
@@ -324,7 +333,7 @@ async function addFloat() {
 
 function selectFloat(id) {
   S.floatId = id; S.sel.clear();
-  localStorage.setItem("fl.float", id);
+  prefs.set("fl.float", id);
   renderRail(); renderMain();
   $("#main").scrollTop = 0;
   const fl = curFloat();
@@ -358,7 +367,7 @@ function renderMain() {
   renderFloatHead();
   const tabs = [["look", "Look"], ["patch", "Patch"], ["save", fl.run_mode === "live_dmx" ? "Parade" : "Save"]];
   root.append(h("div", { class: "tabs" }, tabs.map(([k, label]) =>
-    h("button", { class: "tab" + (S.tab === k ? " active" : ""), onclick: () => { S.tab = k; localStorage.setItem("fl.tab", k); renderMain(); } }, label))));
+    h("button", { class: "tab" + (S.tab === k ? " active" : ""), onclick: () => { S.tab = k; prefs.set("fl.tab", k); renderMain(); } }, label))));
   const body = h("div", { id: "tabBody" });
   root.append(body);
   if (S.tab === "look") renderLook(body, fl);
@@ -813,7 +822,7 @@ async function discover(fl) {
     const r = await api("POST", "/api/discover", { targets: fl.boxes.filter(b => b.ip).map(b => ({ ip: b.ip, udp_port: b.udp_port })), wait: 2.0 });
     S.discover = r.nodes;
     renderMain();
-    if (!r.nodes.length) toast("No Art-Net devices answered. Check the cable, the Mac's Ethernet IP (2.0.0.10), and that the box is set to Ethernet.", "bad");
+    if (!r.nodes.length) toast(NATIVE ? "No boxes answered. Check the iPad is on the venue Wi-Fi and the boxes are powered." : "No Art-Net devices answered. Check the cable, the Mac's Ethernet IP (2.0.0.10), and that the box is set to Ethernet.", "bad");
   } catch (e) { toast(e.message, "bad"); }
 }
 
@@ -1288,15 +1297,18 @@ async function openSetup() {
   const ifs = net.interfaces.filter(i => !i.ip.startsWith("127."));
   const body = h("div");
   const pickWrap = h("div", { style: { margin: "10px 0" } });
+  const wifi = net.wifi;
   body.append(
-    h("div", { class: "kicker small" }, "iPad address"),
-    h("div", { style: { margin: "6px 0 12px" } }, ifs.map(i => h("div", { class: "mono", style: { fontSize: "17px", color: "var(--champagne)" } }, `http://${i.ip}:${port}`))),
-    net.bind_error ? h("div", { class: "note bad", style: { marginTop: "8px" } }, "Art-Net port busy. Quit other lighting apps, then restart.") : null,
-    ifs.length > 1 ? pickWrap : null,
+    NATIVE ? h("div", { class: "kicker small" }, "Wi-Fi") : h("div", { class: "kicker small" }, "iPad address"),
+    NATIVE ? h("div", { class: "mono", style: { margin: "6px 0 12px", fontSize: "17px", color: "var(--champagne)" } }, wifi ? `${wifi.ip} (mask ${wifi.netmask})` : "Not connected. Join the venue Wi-Fi.")
+      : h("div", { style: { margin: "6px 0 12px" } }, ifs.map(i => h("div", { class: "mono", style: { fontSize: "17px", color: "var(--champagne)" } }, `http://${i.ip}:${port}`))),
+    net.bind_error ? h("div", { class: "note bad", style: { marginTop: "8px" } }, NATIVE ? "Art-Net port busy (" + net.bind_error + "). Quit other lighting apps, then reopen this one." : "Art-Net port busy. Quit other lighting apps, then restart.") : null,
+    ifs.length > 1 && !NATIVE ? pickWrap : null,
     h("div", { class: "btn-row", style: { marginTop: "14px" } },
-      h("button", { class: "btn small " + (S.sim ? "go" : "off"), onclick: async () => { const r = await api("POST", "/api/sim", { on: !S.sim }); S.sim = r.sim; openSetup(); renderMain(); } }, S.sim ? "Simulator on" : "Simulator off"),
+      NATIVE ? null : h("button", { class: "btn small " + (S.sim ? "go" : "off"), onclick: async () => { const r = await api("POST", "/api/sim", { on: !S.sim }); S.sim = r.sim; openSetup(); renderMain(); } }, S.sim ? "Simulator on" : "Simulator off"),
       h("button", { class: "btn small ghost", onclick: () => { $("#modalRoot").innerHTML = ""; addFloat(); } }, "+ Float"),
-      h("a", { class: "btn small", href: "/api/project", download: "dmx-scene-builder-project.json" }, "Export"),
+      NATIVE ? h("button", { class: "btn small", onclick: () => window.webkit.messageHandlers.native.postMessage({ cmd: "export" }) }, "Export")
+        : h("a", { class: "btn small", href: "/api/project", download: "dmx-scene-builder-project.json" }, "Export"),
       h("label", { class: "btn small" }, "Import", h("input", { type: "file", accept: ".json,application/json", class: "hidden", onchange: async (e) => {
         const file = e.target.files[0]; if (!file) return;
         e.target.value = "";
@@ -1310,7 +1322,7 @@ async function openSetup() {
       h("button", { class: "btn small ghost", onclick: () => { $("#modalRoot").innerHTML = ""; twTest(); } }, "Tunable white test")),
     saveInfo(),
     h("p", { class: "hint", style: { marginTop: "14px" } }, `v${S.version}`));
-  if (ifs.length > 1) pickWrap.append(networkPicker(net, ifs));
+  if (ifs.length > 1 && !NATIVE) pickWrap.append(networkPicker(net, ifs));
   modal("Setup", body);
 }
 
@@ -1319,7 +1331,7 @@ async function startMerge(incoming) {
   try { plan = await api("POST", "/api/project/merge_plan", incoming); }
   catch (e) { toast(e.message, "bad"); return; }
   if (!plan.new.length && !plan.conflicts.length) {
-    toast(plan.identical.length ? "Nothing new: this computer already has it" : "That file has no floats", "ok");
+    toast(plan.identical.length ? `Nothing new: ${HERE} already has it` : "That file has no floats", "ok");
     return;
   }
   const resolutions = {};
@@ -1333,7 +1345,7 @@ async function startMerge(incoming) {
     body.append(h("div", { class: "kicker small", style: { marginTop: "12px" } }, "Changed on both. Newer one is picked:"));
     for (const c of plan.conflicts) {
       const pickTheirs = resolutions[c.id] === "theirs";
-      const mineBtn = h("button", { class: pickTheirs ? "" : "on" }, `This computer · ${when(c.mine)}`);
+      const mineBtn = h("button", { class: pickTheirs ? "" : "on" }, `${NATIVE ? "This iPad" : "This computer"} · ${when(c.mine)}`);
       const theirsBtn = h("button", { class: pickTheirs ? "on" : "" }, `The file · ${when(c.theirs)}`);
       mineBtn.onclick = () => { resolutions[c.id] = "mine"; mineBtn.className = "on"; theirsBtn.className = ""; };
       theirsBtn.onclick = () => { resolutions[c.id] = "theirs"; theirsBtn.className = "on"; mineBtn.className = ""; };
@@ -1341,7 +1353,7 @@ async function startMerge(incoming) {
         h("div", { class: "seg", style: { marginTop: "6px" } }, mineBtn, theirsBtn)));
     }
   }
-  body.append(h("p", { class: "hint", style: { marginTop: "12px" } }, "Nothing on this computer is ever deleted by Import."));
+  body.append(h("p", { class: "hint", style: { marginTop: "12px" } }, `Nothing on ${HERE} is ever deleted by Import.`));
   modal("Import floats", body, [{ label: "Import", cls: "gold", fn: async () => {
     try {
       const r = await api("POST", "/api/project/merge_apply", { incoming, resolutions });
@@ -1355,6 +1367,13 @@ function saveInfo() {
   const wrap = h("div", { style: { marginTop: "16px" } }, h("div", { class: "kicker small" }, "Saving"));
   api("GET", "/api/settings").then(st => {
     const ago = (t) => t ? Math.max(0, Math.round(Date.now() / 1000 - t)) + " s ago" : "not yet";
+    if (NATIVE) {
+      wrap.append(
+        h("p", { class: "hint", style: { margin: "4px 0" } }, "Every change saves on this iPad within a second. Last save: " + ago(st.last_saved) + "."),
+        st.save_error ? h("div", { class: "note bad" }, "Saving failed: " + st.save_error) : null,
+        h("p", { class: "hint" }, "Files app › On My iPad › DMX Scene Builder holds the project and its backups. Press Export to send a copy to a Mac, iCloud Drive or a colleague."));
+      return;
+    }
     wrap.append(
       h("p", { class: "hint", style: { margin: "4px 0" } }, "Every change saves on this computer within a second. Last save: " + ago(st.last_saved) + "."),
       h("div", { class: "mono", style: { fontSize: "12px", color: "var(--muted)", wordBreak: "break-all" } }, st.data_file),
@@ -1488,6 +1507,13 @@ function networkPicker(net, ifs) {
 
 async function refreshAddr() {
   // This computer's address(es), so it's easy to type on the iPad. Box-network adapter first.
+  if (NATIVE) {  // the iPad is the server: show its Wi-Fi address instead
+    try {
+      const net = await api("GET", "/api/network");
+      $("#addrLine").textContent = net.wifi ? "Wi-Fi " + net.wifi.ip : "No Wi-Fi: join the venue network";
+    } catch (e) { /* try again next tick */ }
+    return;
+  }
   try {
     const net = await api("GET", "/api/network");
     const ifs = net.interfaces.filter(i => !i.ip.startsWith("127.") && !i.ip.startsWith("169.254."));
@@ -1520,7 +1546,7 @@ async function boot() {
   try {
     await loadState();
   } catch (e) {
-    $("#mainInner").append(h("div", { class: "card" }, h("h2", null, "Can't reach DMX Scene Builder"), h("p", null, "Is the DMX Scene Builder window still open on the Mac? " + e.message)));
+    $("#mainInner").append(h("div", { class: "card" }, h("h2", null, "Can't reach DMX Scene Builder"), h("p", null, (NATIVE ? "Close the app and open it again. " : "Is the DMX Scene Builder window still open on the Mac? ") + e.message)));
     return;
   }
   renderStatus(); renderRail(); renderMain();
