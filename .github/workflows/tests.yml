@@ -19,3 +19,15 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover -s tests -t . -v
+  ios:
+    # The iPad app: build it and run its Swift tests on an iPad simulator, with the Python
+    # fake E-Box for the end-to-end tests. Separate job: the Python jobs above don't depend on it.
+    runs-on: macos-latest
+    continue-on-error: true  # simulator images on hosted runners change often; Python stays the gate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 tools/make_golden.py && git diff --exit-code ios/Tests/golden.json
+      - run: tools/ios_test.sh
