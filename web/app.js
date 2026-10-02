@@ -96,7 +96,7 @@ function hsvToRgb(hh, s, v) {
   const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
   return [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i];
 }
-const DEFAULT_STATE = { dim: 1, kind: "white", cct: 3000, hue: 30, sat: 1, white: 0 };
+const DEFAULT_STATE = { dim: 1, kind: "white", cct: 3000, hue: 30, sat: 1, white: 0, boost: false };
 function twMin(fx) { return fx.mode === 7 ? 3000 : 2700; }  // Mode 7 mixes the 3000K and 6500K LEDs directly
 function effVariant(fx) { return (MODES[fx.variant] && MODES[fx.variant][fx.mode]) ? fx.variant : "RGBW"; }
 function stateOf(fl, fx) { return Object.assign({}, DEFAULT_STATE, (fl.live || {})[fx.id] || {}); }
@@ -151,7 +151,7 @@ function mixText(fx, st, short) {
     const t = short ? `R${m.r} G${m.g} B${m.b} W${m.w}` : `R ${m.r} · G ${m.g} · B ${m.b} · W ${m.w}`;
     return m.k ? t + (short ? "" : ` (fixture white ${m.k}K)`) : t;
   }
-  return m.k ? m.k + "K" : "";
+  return m.k ? m.k + "K" + (fx.variant === "TW" && fx.mode === 7 && st.boost ? (short ? " max" : " · max output") : "") : "";
 }
 
 function MODES_ROLES(fx) { const m = (MODES[effVariant(fx)] || {})[fx.mode]; return m ? m.roles : []; }
@@ -519,6 +519,16 @@ function renderLook(body, fl) {
       card.append(h("div", { class: "presets" },
         [2700, 3000, 4000, 5600, 6500].filter(k => k >= lo).map(k => h("button", { onclick: () => { apply({ cct: k }); renderPanel(); } }, k + "K"))));
       if (noCtc.length) card.append(h("p", { class: "hint" }, `${noCtc.length} RGB fixture(s) can't tune white in their mode.`));
+      const tw7 = chosen.filter(f => f.variant === "TW" && f.mode === 7);
+      if (tw7.length) {
+        const boosts = tw7.map(f => !!stateOf(fl, f).boost);
+        const all = boosts.every(Boolean), none = !boosts.some(Boolean);
+        const only = (on) => (f) => (f.variant === "TW" && f.mode === 7 ? { boost: on } : {});
+        card.append(h("div", { class: "ctl" }, h("div", { class: "ctl-label" }, h("span", { class: "kicker small" }, "Output")),
+          h("div", { class: "seg" },
+            h("button", { class: none ? "on" : "", onclick: () => { apply(only(false)); renderPanel(); } }, "Even"),
+            h("button", { class: all ? "on" : "", onclick: () => { apply(only(true)); renderPanel(); } }, "Max output"))));
+      }
     }
 
     // color (RGB in color)

@@ -227,3 +227,16 @@ class TunableWhiteMode7Tests(unittest.TestCase):
         from scenebuilder import fixtures
         self.assertEqual(fixtures.footprint("TW", 7), 15)
         self.assertEqual(fixtures.render("TW", 7, {"cct": 5000}, special=1)[0], 1)
+
+
+class TunableWhiteBoostTests(unittest.TestCase):
+    def test_max_output_drives_both_leds_full_mid_range(self):
+        from scenebuilder import fixtures
+        d = fixtures.render("TW", 7, {"dim": 1.0, "cct": 4100, "boost": True})
+        self.assertTrue(min(d[1], d[3], d[5], d[7]) > 240, list(d))
+        self.assertIn("max output", fixtures.describe_mix("TW", 7, {"cct": 4100, "boost": True}))
+
+    def test_max_output_same_at_the_ends(self):
+        from scenebuilder import fixtures
+        for k in (3000, 6500):
+            self.assertEqual(fixtures.render("TW", 7, {"cct": k, "boost": True}), fixtures.render("TW", 7, {"cct": k}))

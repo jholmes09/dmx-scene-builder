@@ -124,7 +124,7 @@ def _u8(x: float) -> int:
     return int(round(max(0.0, min(1.0, x)) * 255))
 
 
-DEFAULT_STATE = {"dim": 1.0, "kind": "white", "cct": 3000, "hue": 30.0, "sat": 1.0, "white": 0.0}
+DEFAULT_STATE = {"dim": 1.0, "kind": "white", "cct": 3000, "hue": 30.0, "sat": 1.0, "white": 0.0, "boost": False}
 
 
 def normalize_state(state: dict, variant: str) -> dict:
@@ -135,6 +135,7 @@ def normalize_state(state: dict, variant: str) -> dict:
     s["hue"] = float(s["hue"]) % 360.0
     s["sat"] = max(0.0, min(1.0, float(s["sat"])))
     s["white"] = max(0.0, min(1.0, float(s["white"])))
+    s["boost"] = bool(s["boost"])
     if variant != "RGBW" or s["kind"] not in ("white", "color"):
         s["kind"] = "white"
     return s
@@ -204,8 +205,10 @@ def role_values(variant: str, mode: int, state: dict, special: int = 0, cal: Opt
             # (full-on both LEDs at 4000K looked about twice as bright as 3000K/6500K).
             k7 = max(TW7_MIN_K, min(TW_MAX_K, s["cct"]))
             cool = (1e6 / TW7_MIN_K - 1e6 / k7) / (1e6 / TW7_MIN_K - 1e6 / TW_MAX_K)
-            vals["r"] = vals["b"] = cool
-            vals["g"] = vals["w"] = 1.0 - cool
+            # "Max output": both LEDs as high as they go (mid-range whites come out up to ~2x brighter).
+            peak = max(cool, 1.0 - cool) if s["boost"] else 1.0
+            vals["r"] = vals["b"] = cool / peak
+            vals["g"] = vals["w"] = (1.0 - cool) / peak
     vals["dim"] = dim
     vals["special_byte"] = special
     return vals
@@ -224,6 +227,8 @@ def mix_values(variant: str, mode: int, state: dict, cal: Optional[dict] = None)
     elif variant == "TW":
         lo = TW7_MIN_K if "r" in mode_info(variant, mode)["roles"] else TW_MIN_K
         out["k"] = int(max(lo, min(TW_MAX_K, s["cct"])))
+        if s["boost"] and lo == TW7_MIN_K:
+            out["boost"] = True
     return out
 
 
@@ -233,7 +238,7 @@ def describe_mix(variant: str, mode: int, state: dict, cal: Optional[dict] = Non
         txt = "%d%%  R %d  G %d  B %d  W %d" % (m["dim"], m["r"], m["g"], m["b"], m["w"])
         return txt + ("  (fixture white %dK)" % m["ctc_k"] if "ctc_k" in m else "")
     if variant == "TW":
-        return "%d%%  %dK" % (m["dim"], m["k"])
+        return "%d%%  %dK" % (m["dim"], m["k"]) + ("  max output" if m.get("boost") else "")
     return "%d%%" % m["dim"]
 
 
