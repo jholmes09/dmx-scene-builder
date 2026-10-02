@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 .DS_Store
 /scratch/
+
+# Xcode
+ios/DMXSceneBuilder.xcodeproj/xcuserdata/
+ios/DMXSceneBuilder.xcodeproj/project.xcworkspace/xcuserdata/
+ios/build/
+DerivedData/

@@ -1,0 +1,84 @@
+# Generate the Xcode project with:  cd ios && xcodegen
+# (The generated DMXSceneBuilder.xcodeproj is committed too, so Xcode alone is enough.)
+name: DMXSceneBuilder
+options:
+  bundleIdPrefix: com.jhp
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+targets:
+  DMXSceneBuilder:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      - path: Core
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jhp.dmxscenebuilder
+        PRODUCT_NAME: DMX Scene Builder
+        TARGETED_DEVICE_FAMILY: "2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        INFOPLIST_KEY_CFBundleDisplayName: Scene Builder
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Scene Builder
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: ""
+        UIRequiresFullScreen: false
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSLocalNetworkUsageDescription: "DMX Scene Builder talks to the E-Box Remote boxes on the venue Wi-Fi to control the float lights."
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        ITSAppUsesNonExemptEncryption: false
+    preBuildScripts:
+      - name: Bundle the web UI from ../web
+        basedOnDependencyAnalysis: false
+        script: |
+          # One copy of the UI: the same web/ folder the Mac/Windows server uses.
+          set -e
+          DEST="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/web"
+          mkdir -p "$DEST"
+          rsync -a --delete --exclude ".DS_Store" "${SRCROOT}/../web/" "$DEST/"
+  DMXSceneBuilderTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Core
+      - path: Tests
+        excludes:
+          - "*.json"
+      - path: Tests/golden.json
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jhp.dmxscenebuilder.tests
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  DMXSceneBuilder:
+    build:
+      targets:
+        DMXSceneBuilder: all
+        DMXSceneBuilderTests: [test]
+    test:
+      targets:
+        - DMXSceneBuilderTests
+      gatherCoverageData: false
