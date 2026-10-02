@@ -194,3 +194,32 @@ class MixValuesTests(unittest.TestCase):
     def test_mode1_white_is_white_led_only(self):
         m = fixtures.mix_values("RGBW", 1, {"dim": 1, "kind": "white", "cct": 3200})
         self.assertEqual((m["r"], m["g"], m["b"], m["w"]), (0, 0, 0, 255))
+
+
+class TunableWhiteMode7Tests(unittest.TestCase):
+    """TW Calumma in Mode 7 (field test): CTC ignored, R+B = cool LED, G+W = warm LED."""
+
+    def _rgbw(self, k):
+        from scenebuilder import fixtures
+        d = fixtures.render("TW", 7, {"dim": 0.8, "kind": "white", "cct": k}, special=0)
+        return d[1], d[3], d[5], d[7], d[10], d[13]  # r g b w ctc dim
+
+    def test_warm_end_is_warm_leds_only(self):
+        r, g, b, w, ctc, dim = self._rgbw(3000)
+        self.assertEqual((r, b), (0, 0))
+        self.assertEqual((g, w), (255, 255))
+        self.assertEqual(ctc, 0)
+        self.assertEqual(dim, 204)
+
+    def test_cool_end_is_cool_leds_only(self):
+        r, g, b, w, _, _ = self._rgbw(6500)
+        self.assertEqual((r, b, g, w), (255, 255, 0, 0))
+
+    def test_about_4000k_is_both_full(self):
+        r, g, b, w, _, _ = self._rgbw(4100)
+        self.assertTrue(min(r, g, b, w) > 240, (r, g, b, w))
+
+    def test_special_channel_first_and_footprint(self):
+        from scenebuilder import fixtures
+        self.assertEqual(fixtures.footprint("TW", 7), 15)
+        self.assertEqual(fixtures.render("TW", 7, {"cct": 5000}, special=1)[0], 1)

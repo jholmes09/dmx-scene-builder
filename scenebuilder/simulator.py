@@ -44,8 +44,7 @@ class VirtualModule:
 
     @property
     def personalities(self) -> List[int]:
-        # Real modules expose their variant's modes. The simulator also offers Mode 7 on TW modules
-        # only if asked to (unknown on real hardware), see EBoxSimulator(tw_has_mode7=...)
+        # Real modules expose their variant's modes (TW Calumma also accept Mode 7, field-tested 2026-10-01)
         return sorted(fixtures.MODES[self.variant].keys())
 
     def footprint(self) -> int:
@@ -225,7 +224,7 @@ class EBoxSimulator:
         def nack(code):
             return reply(struct.pack(">H", code), rdm.NACK)
 
-        pers = m.personalities + ([7] if (self.tw_has_mode7 and m.variant == "TW") else [])
+        pers = m.personalities
         with self.lock:
             if msg.cc == rdm.GET:
                 if msg.pid == rdm.PID_DEVICE_INFO:

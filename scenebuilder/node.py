@@ -265,7 +265,10 @@ class ArtNetController:
         nxt = time.monotonic()
         while not self._stop.is_set():
             if self.output_enabled:
-                self.send_now()
+                try:
+                    self.send_now()
+                except Exception:  # never let one bad frame stop output for good
+                    log.exception("send failed")
             nxt += period
             delay = nxt - time.monotonic()
             if delay < -1:

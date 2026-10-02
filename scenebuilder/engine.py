@@ -206,7 +206,7 @@ class Engine:
                             data[i] = 128
                     data = bytes(data)
                 wt = self.white_test
-                if (wt and effective_variant(fx) == "RGBW" and fx["mode"] == fixtures.SAVE_MODE
+                if (wt and fx["mode"] == fixtures.SAVE_MODE
                         and (wt["method"] in TW_PROBES) == (fx["variant"] == "TW")):
                     data = white_test_bytes(wt["method"], wt["k"], wt.get("mix"))
                 a = fx["address"] - 1

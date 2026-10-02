@@ -419,5 +419,5 @@ def patch_problems(fl: dict) -> list:
 
 
 def effective_variant(fx: dict) -> str:
-    """Rendering variant: a TW module switched to Mode 7 renders with the RGBW Mode 7 layout."""
+    """Rendering variant (TW now has its own Mode 7 mapping; kept for older callers)."""
     return fx["variant"] if fx["mode"] in fixtures.MODES[fx["variant"]] else "RGBW"

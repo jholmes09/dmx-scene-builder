@@ -302,7 +302,7 @@ def reap_variant(mode: int):
 def reap_scan_entry(d: dict) -> dict:
     mode = int(d.get("dmx_p") or 1)
     variant = reap_variant(mode)
-    avail = sorted(fixtures.MODES[variant or "RGBW"]) + ([fixtures.SAVE_MODE] if variant not in ("RGBW", None) else [])
+    avail = sorted(set(fixtures.MODES[variant or "RGBW"]) | ({fixtures.SAVE_MODE} if variant == "PW" else set()))
     fp = None
     try:
         fp = fixtures.footprint(variant if variant and mode in fixtures.MODES[variant] else "RGBW", mode)
@@ -468,7 +468,11 @@ class Handler(BaseHTTPRequestHandler):
             if eng.applying and action in ("activate", "resume", "release", "white_test", "hold"):
                 raise RuntimeError("Lights are being changed right now. Wait for that to finish.")
             if action == "activate":
-                eng.set_active(b.get("float_id"), output=True)
+                job = eng.job
+                if job and job.get("state") == "running" and job.get("float") != b.get("float_id"):
+                    raise RuntimeError("A save is running on another float. Wait for it to finish.")
+                if not (job and job.get("state") == "running" and eng.active_float == b.get("float_id")):
+                    eng.set_active(b.get("float_id"), output=True)
             elif action == "release":
                 eng.release()
             elif action == "resume":

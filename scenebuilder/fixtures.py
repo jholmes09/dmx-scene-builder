@@ -42,6 +42,9 @@ MODES: Dict[str, Dict[int, dict]] = {
         11: {"name": "Mode 11 - White selection + dimmer", "roles": ["wsel", "dim", "dim_f"]},
         12: {"name": "Mode 12 - Warm + cool + dimmer", "roles": ["ww", "cw", "dim", "dim_f"]},
         13: {"name": "Mode 13 - Dimmer only", "roles": ["dim", "dim_f"]},
+        # Not in Robe's chart, but TW Calumma accept it (field test 2026-10-01): CTC is ignored,
+        # red + blue drive the cool LEDs, green + white the warm ones. The only mode that can save a look.
+        7: {"name": "Mode 7 - Full control (can save stand-alone look)", "roles": ["special", "r", "r_f", "g", "g_f", "b", "b_f", "w", "w_f", "gc", "ctc", "vcw", "shutter", "dim", "dim_f"]},
     },
     "PW": {
         13: {"name": "Mode 13 - Dimmer only", "roles": ["dim", "dim_f"]},
@@ -60,6 +63,7 @@ VARIANT_LABELS = {
 # Calibrated CTC anchors: (DMX value, Kelvin) from the chart: 21-1800, 66-2700, 91-3200, 141-4200, 211-5600, 255-6500
 CTC_ANCHORS = [(21, 1800), (66, 2700), (91, 3200), (141, 4200), (211, 5600), (255, 6500)]
 TW_MIN_K, TW_MAX_K = 2700, 6500
+TW7_MIN_K = 3000  # the SDC tunable whites' warm LED (Mode 7 mixes the two LEDs directly)
 
 
 def mode_info(variant: str, mode: int) -> dict:
@@ -195,6 +199,12 @@ def role_values(variant: str, mode: int, state: dict, special: int = 0, cal: Opt
         warm = 1.0 - cool
         peak = max(warm, cool) or 1.0
         vals["ww"], vals["cw"] = warm / peak, cool / peak
+        if "r" in roles:  # Mode 7: blend the two LEDs in mireds (equal parts measured ~4000K)
+            k7 = max(TW7_MIN_K, min(TW_MAX_K, s["cct"]))
+            cool = (1e6 / TW7_MIN_K - 1e6 / k7) / (1e6 / TW7_MIN_K - 1e6 / TW_MAX_K)
+            peak = max(cool, 1.0 - cool)
+            vals["r"] = vals["b"] = cool / peak
+            vals["g"] = vals["w"] = (1.0 - cool) / peak
     vals["dim"] = dim
     vals["special_byte"] = special
     return vals
@@ -211,7 +221,8 @@ def mix_values(variant: str, mode: int, state: dict, cal: Optional[dict] = None)
         if s["kind"] == "white" and v.get("ctc_byte"):
             out["ctc_k"] = int(round(ctc_to_kelvin(v["ctc_byte"]) / 10.0) * 10)
     elif variant == "TW":
-        out["k"] = int(max(TW_MIN_K, min(TW_MAX_K, s["cct"])))
+        lo = TW7_MIN_K if "r" in mode_info(variant, mode)["roles"] else TW_MIN_K
+        out["k"] = int(max(lo, min(TW_MAX_K, s["cct"])))
     return out
 
 

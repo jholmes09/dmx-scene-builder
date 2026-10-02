@@ -84,7 +84,7 @@ class IntegrationTests(unittest.TestCase):
         rgb = [d for d in scan["devices"] if d["variant_guess"] == "RGBW"]
         self.assertEqual((len(tw), len(rgb)), (4, 2))
         self.assertEqual(tw[0]["mode"], 11)
-        self.assertEqual(tw[0]["modes_available"], [11, 12, 13])
+        self.assertEqual(tw[0]["modes_available"], [7, 11, 12, 13])
 
         # Readdress every module via RDM: TW at 1,4,7,10; RGBW to Mode 7 at 13, 28
         addr = 1
@@ -97,9 +97,11 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(r["info"]["mode"], 7)
             self.api.call("POST", "/api/floats/%s/rdm" % fl["id"], {"box_id": box, "uid": d["uid"], "action": "address", "address": addr})
             addr += 15
-        # Mode 7 on a TW module is refused with a clear message
+        # TW modules accept Mode 7 (field-tested), and can go back to Mode 11
         r = self.api.call("POST", "/api/floats/%s/rdm" % fl["id"], {"box_id": box, "uid": tw[0]["uid"], "action": "mode", "mode": 7})
-        self.assertIn("doesn't offer Mode 7", r.get("error", ""))
+        self.assertEqual(r["info"]["mode"], 7, r)
+        r = self.api.call("POST", "/api/floats/%s/rdm" % fl["id"], {"box_id": box, "uid": tw[0]["uid"], "action": "mode", "mode": 11})
+        self.assertEqual(r["info"]["mode"], 11, r)
         # identify
         r = self.api.call("POST", "/api/floats/%s/rdm" % fl["id"], {"box_id": box, "uid": tw[1]["uid"], "action": "identify", "on": True})
         self.assertTrue(self.sim.module(bytes.fromhex(tw[1]["uid"].replace(":", ""))).identify)

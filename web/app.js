@@ -26,10 +26,20 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const uid8 = () => Math.random().toString(16).slice(2, 10);
 
 async function api(method, path, body) {
-  const r = await fetch(path, {
-    method, headers: body !== undefined ? { "Content-Type": "application/json" } : {},
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  // Every request gives up eventually, so one lost on flaky Wi-Fi can't freeze the page.
+  // Scans, Mode 7 switching and saves talk to the lights and can take a minute.
+  const slow = /\/(scan|apply|rdm|save|verify|box|autopatch)\b/.test(path);
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), slow ? 150000 : 8000);
+  let r;
+  try {
+    r = await fetch(path, {
+      method, headers: body !== undefined ? { "Content-Type": "application/json" } : {},
+      body: body !== undefined ? JSON.stringify(body) : undefined, signal: ctl.signal,
+    });
+  } catch (e) {
+    throw new Error(e.name === "AbortError" ? "The Mac didn't answer in time. Try again." : "Can't reach the Mac: " + e.message);
+  } finally { clearTimeout(timer); }
   let data = null;
   try { data = await r.json(); } catch (e) { /* ignore */ }
   if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
@@ -87,6 +97,7 @@ function hsvToRgb(hh, s, v) {
   return [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i];
 }
 const DEFAULT_STATE = { dim: 1, kind: "white", cct: 3000, hue: 30, sat: 1, white: 0 };
+function twMin(fx) { return fx.mode === 7 ? 3000 : 2700; }  // Mode 7 mixes the 3000K and 6500K LEDs directly
 function effVariant(fx) { return (MODES[fx.variant] && MODES[fx.variant][fx.mode]) ? fx.variant : "RGBW"; }
 function stateOf(fl, fx) { return Object.assign({}, DEFAULT_STATE, (fl.live || {})[fx.id] || {}); }
 function previewCss(fx, st) {
@@ -98,7 +109,7 @@ function previewCss(fx, st) {
     rgb = rgb.map((c, i) => Math.min(1, c + st.white * w[i]));
   } else if (v === "PW") rgb = kelvinToRgb(3000);
   else if (v === "RGBW" && !MODES_ROLES(fx).includes("ctc")) rgb = kelvinToRgb(fx.variant === "RGBW" ? 6500 : 3000);
-  else rgb = kelvinToRgb(v === "TW" ? clamp(st.cct, 2700, 6500) : st.cct);
+  else rgb = kelvinToRgb(v === "TW" ? clamp(st.cct, twMin(fx), 6500) : st.cct);
   const d = st.dim;
   // perceptual boost so dim looks still read on screen
   const k = d <= 0 ? 0 : 0.12 + 0.88 * Math.pow(d, 0.6);
@@ -130,7 +141,7 @@ function mixValues(fx, st) {
       else { r = g = b = 1; w = 0; }
     }
     Object.assign(out, { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255), w: Math.round(w * 255) });
-  } else if (v === "TW") out.k = Math.round(clamp(st.cct, 2700, 6500));
+  } else if (v === "TW") out.k = Math.round(clamp(st.cct, twMin(fx), 6500));
   return out;
 }
 
@@ -211,6 +222,7 @@ async function refreshProblems() {
 // live look changes, merged and throttled
 const liveQ = { pending: {}, timer: null, inflight: false };
 function sendLive(fl, changes) {
+  ensureLive(fl);  // touching a control takes control (like a console after Release)
   for (const [id, st] of Object.entries(changes)) {
     fl.live[id] = Object.assign({}, DEFAULT_STATE, fl.live[id] || {}, st);
     liveQ.pending[id] = Object.assign(liveQ.pending[id] || {}, st);
@@ -315,6 +327,21 @@ function selectFloat(id) {
   localStorage.setItem("fl.float", id);
   renderRail(); renderMain();
   $("#main").scrollTop = 0;
+  const fl = curFloat();
+  if (fl) ensureLive(fl);  // a set-up float is controllable the moment you pick it
+}
+
+let liveReq = null;
+function ensureLive(fl) {
+  // Go live on this float unless it already is, has no box IP yet, or the lights are mid-change.
+  const e = S.engine;
+  if (isLive(fl) || liveReq || !fl.boxes.some(b => b.ip)) return liveReq;
+  if (e.hold || e.applying || e.sweep || (e.job && e.job.state === "running")) return null;
+  liveReq = api("POST", "/api/output", { action: "activate", float_id: fl.id })
+    .then(r => { S.engine = r.engine; renderStatus(); renderRail(); renderFloatHead(); })
+    .catch(err => toast(err.message, "bad"))
+    .finally(() => { liveReq = null; });
+  return liveReq;
 }
 
 // ------------------------------------------------------------------ main area
@@ -480,7 +507,8 @@ function renderLook(body, fl) {
     const showCct = variants.has("TW") || (hasRGB && kind !== "color");
     if (showCct) {
       const onlyRgb = !variants.has("TW");
-      const lo = onlyRgb ? 1800 : 2700, hi = 6500;
+      const tws = chosen.filter(f => f.variant === "TW");
+      const lo = onlyRgb ? 1800 : (tws.length && tws.every(f => f.mode === 7) ? 3000 : 2700), hi = 6500;
       const ccts = states.map(s => Math.round(s.cct));
       const noCtc = chosen.filter(f => effVariant(f) === "RGBW" && !MODES_ROLES(f).includes("ctc"));
       card.append(sliderCtl({
@@ -813,7 +841,7 @@ function bulkBar(fl) {
   const typeSel = h("select", { class: "f", style: { width: "auto" } },
     h("option", { value: "" }, types.length === 1 ? { TW: "TW", RGBW: "RGBW", PW: "White" }[types[0]] : "Mixed types"),
     [["TW", "TW"], ["RGBW", "RGBW"], ["PW", "White"]].map(([v, l]) => h("option", { value: v }, "→ " + l)));
-  const modeFor = (v) => Object.values(MODES[v] || {}).map(m => m.mode).concat(v === "TW" ? [7] : []);
+  const modeFor = (v) => Object.values(MODES[v] || {}).map(m => m.mode);
   const modeSel = h("select", { class: "f", style: { width: "auto" } });
   const fillModes = () => {
     const v = typeSel.value || (types.length === 1 ? types[0] : null);
@@ -891,7 +919,6 @@ function fixtureTable(fl) {
   fl.fixtures.forEach((fx) => {
     const st = stateOf(fl, fx);
     const modeOpts = Object.values(MODES[fx.variant] || {}).map(m => h("option", { value: m.mode, selected: m.mode === fx.mode }, m.mode + " · " + m.footprint + " ch"));
-    if (fx.variant === "TW") modeOpts.push(h("option", { value: 7, selected: fx.mode === 7 }, "7 · 15 ch"));
     t.append(h("tr", { class: errIds.has(fx.id) ? "err" : "" },
       h("td", null, h("input", { type: "checkbox", checked: S.patchSel.has(fx.id) || null, style: { width: "20px", height: "20px" },
         onchange: e => { e.target.checked ? S.patchSel.add(fx.id) : S.patchSel.delete(fx.id); renderMain(); } })),
