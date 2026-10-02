@@ -9,8 +9,8 @@ LOG="$(mktemp -t fakebox)"
 python3 "$ROOT/tools/ios_fakebox.py" > "$LOG" 2>&1 &
 FB=$!
 trap 'kill $FB 2>/dev/null' EXIT
-for i in 1 2 3 4 5 6 7 8 9 10; do grep -q control_port "$LOG" && break; sleep 0.5; done
-CONTROL=$(python3 -c "import json,sys; print(json.loads(open(sys.argv[1]).readline())['control_port'])" "$LOG")
+i=0; until grep -q control_port "$LOG"; do i=$((i+1)); [ $i -gt 60 ] && { echo "Fake E-Box didn't start:"; cat "$LOG"; exit 1; }; sleep 0.5; done
+CONTROL=$(grep control_port "$LOG" | head -1 | python3 -c "import json,sys; print(json.loads(sys.stdin.read())['control_port'])")
 if [ -z "$SIM" ]; then
   SIM=$(xcrun simctl list devices available -j | python3 -c "
 import json,sys
