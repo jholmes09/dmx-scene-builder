@@ -199,12 +199,13 @@ def role_values(variant: str, mode: int, state: dict, special: int = 0, cal: Opt
         warm = 1.0 - cool
         peak = max(warm, cool) or 1.0
         vals["ww"], vals["cw"] = warm / peak, cool / peak
-        if "r" in roles:  # Mode 7: blend the two LEDs in mireds (equal parts measured ~4000K)
+        if "r" in roles:  # Mode 7: blend the two LEDs in mireds (equal parts measured ~4000K).
+            # Shares add up to one LED's worth, so brightness stays even across the range
+            # (full-on both LEDs at 4000K looked about twice as bright as 3000K/6500K).
             k7 = max(TW7_MIN_K, min(TW_MAX_K, s["cct"]))
             cool = (1e6 / TW7_MIN_K - 1e6 / k7) / (1e6 / TW7_MIN_K - 1e6 / TW_MAX_K)
-            peak = max(cool, 1.0 - cool)
-            vals["r"] = vals["b"] = cool / peak
-            vals["g"] = vals["w"] = (1.0 - cool) / peak
+            vals["r"] = vals["b"] = cool
+            vals["g"] = vals["w"] = 1.0 - cool
     vals["dim"] = dim
     vals["special_byte"] = special
     return vals

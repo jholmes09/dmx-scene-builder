@@ -215,9 +215,13 @@ class TunableWhiteMode7Tests(unittest.TestCase):
         r, g, b, w, _, _ = self._rgbw(6500)
         self.assertEqual((r, b, g, w), (255, 255, 0, 0))
 
-    def test_about_4000k_is_both_full(self):
-        r, g, b, w, _, _ = self._rgbw(4100)
-        self.assertTrue(min(r, g, b, w) > 240, (r, g, b, w))
+    def test_even_brightness_across_range(self):
+        for k in (3000, 3500, 4100, 5000, 6500):
+            r, g, b, w, _, _ = self._rgbw(k)
+            self.assertAlmostEqual(r + g, 255, delta=1, msg=k)
+            self.assertEqual((r, g), (b, w))
+        r, g, _, _, _, _ = self._rgbw(4100)
+        self.assertTrue(110 < r < 145 and 110 < g < 145, (r, g))
 
     def test_special_channel_first_and_footprint(self):
         from scenebuilder import fixtures
