@@ -250,6 +250,8 @@ async function flushLive(fid) {
 }
 
 // ------------------------------------------------------------------ top bar & status
+function boxesDown(e) { return (e.boxes || []).filter(b => b.state === "down"); }
+
 function renderStatus() {
   const pill = $("#statusPill"), txt = $("#statusText");
   const e = S.engine;
@@ -257,7 +259,13 @@ function renderStatus() {
   pill.className = "status-pill";
   if (e.bind_error) { pill.classList.add("warn"); txt.textContent = "Port busy"; pill.title = e.bind_error; }
   else if (e.output && e.send_error) { pill.classList.add("warn"); txt.textContent = "Can't reach box"; pill.title = e.send_error + (NATIVE ? ". Check the iPad is on the venue Wi-Fi." : ". Check the cable and the Mac's Ethernet IP (Setup)."); }
-  else if (e.output && live) { pill.classList.add("live"); txt.textContent = "Live · " + (live.code || live.name); pill.title = "Sending to " + live.name; }
+  else if (e.output && live && boxesDown(e).length) {
+    const down = boxesDown(e);
+    pill.classList.add("warn"); txt.textContent = "Box not answering";
+    pill.title = down.map(b => b.name + " (" + b.ip + ")").join(", ") + " isn't answering. Check it's plugged in and powered, and that you're on its network.";
+  }
+  else if (e.output && live && (e.boxes || []).some(b => b.state === "checking")) { pill.classList.add("warn"); txt.textContent = "Looking for box…"; pill.title = "Waiting for the box to answer"; }
+  else if (e.output && live) { pill.classList.add("live"); txt.textContent = "Live · " + (live.code || live.name); pill.title = "Sending to " + live.name + " (box answering)"; }
   else if (S.sim) { pill.classList.add("sim"); txt.textContent = "Simulator on"; pill.title = "Virtual E-Box is running"; }
   else { txt.textContent = "Not sending"; pill.title = "Nothing is being sent to the boxes"; }
   if (e.paused_for_rdm) { txt.textContent = "Talking to fixtures"; }
@@ -280,7 +288,8 @@ async function pollStatus() {
     renderStatus();
     await maybeSync(st.rev);
     updateLiveBits();
-    if ((S.engine.active_float + ":" + S.engine.output) !== prevActive) { renderRail(); renderFloatHead(); }
+    const boxKey = (S.engine.boxes || []).map(b => b.state).join(",");
+    if ((S.engine.active_float + ":" + S.engine.output) !== prevActive || boxKey !== S.boxKey) { S.boxKey = boxKey; renderRail(); renderFloatHead(); }
     if (wasJob === "running" && S.engine.job && S.engine.job.state !== "running" && S.tab === "save") renderMain();
   } catch (e) {
     $("#statusText").textContent = "No connection";
@@ -392,6 +401,8 @@ function renderFloatHead() {
         errs ? h("button", { class: "chip-warn", onclick: () => { S.tab = "patch"; renderMain(); } }, "Address overlap") : null)),
     S.engine.hold && live
       ? h("button", { class: "btn danger", onclick: () => $("#releaseBtn").click() }, "Held dark · Clear hold")
+      : live && boxesDown(S.engine).length
+      ? h("span", { class: "status-pill warn" }, "Box not answering")
       : live
       ? h("span", { class: "status-pill live" }, h("span", { class: "dot" }), "Live")
       : h("button", { class: "btn gold", onclick: () => goLive(fl) }, "Go live")));
@@ -402,7 +413,7 @@ async function goLive(fl) {
     const r = await api("POST", "/api/output", { action: "activate", float_id: fl.id });
     S.engine = r.engine;
     renderStatus(); renderRail(); renderMain();
-    toast("Live on " + fl.name, "ok");
+    toast("Sending to " + fl.name + ". Checking the box answers…", "ok");
   } catch (e) { toast(e.message, "bad"); }
 }
 

@@ -76,6 +76,39 @@ final class Engine {
         let t = Thread { [weak self] in self?.loop() }
         t.name = "engine"
         t.start()
+        let w = Thread { [weak self] in self?.watchBoxes() }
+        w.name = "box-watch"
+        w.start()
+    }
+
+    // ------------------------------------------------------------ is the box really there?
+    /// "Live" means a box answers, not just that we're sending: poll each box on the active float
+    /// directly (unicast ArtPoll) so a pulled cable shows up within seconds.
+    var boxCheckS: Double = 2.0
+    var boxLostS: Double = 5.0
+    private var activeSince: Double = 0
+
+    private func watchBoxes() {
+        while true {
+            if withLock({ stopped }) { return }
+            if !withLock({ inBackground }) {
+                for t in framesTargets() { _ = ctl.sendQuiet(ArtNet.buildPoll(), t.ip, t.port) }
+            }
+            Thread.sleep(forTimeInterval: boxCheckS)
+        }
+    }
+
+    /// [{name, ip, state: ok | checking | down}] for the boxes on the active float.
+    func boxStates() -> JSON {
+        guard let fid = withLock({ activeFloat }), let fl = store.getFloat(fid) else { return .array([]) }
+        let now = Date().timeIntervalSince1970
+        let young = withLock { Engine.now() - activeSince < boxLostS }
+        return .array(fl["boxes"].arrayValue.filter { $0["ip"].truthy }.map { b in
+            let ip = b["ip"].string ?? ""
+            let ok = now - ctl.lastSeen(ip) < boxLostS
+            return ["name": .string(b["name"].string ?? "Box"), "ip": .string(ip),
+                    "state": .string(ok ? "ok" : (young ? "checking" : "down"))]
+        })
     }
 
     func withLock<T>(_ body: () throws -> T) rethrows -> T {
@@ -90,6 +123,7 @@ final class Engine {
         withLock {
             releaseToken += 1  // going live cancels a Release that's still sending black
             releasing = false
+            if fid != activeFloat { activeSince = Engine.now() }
             activeFloat = fid
             flash.removeAll(); special.removeAll(); dark.removeAll()
             sweep = nil
@@ -165,10 +199,11 @@ final class Engine {
     }
 
     func status() -> JSON {
-        withLock {
+        let boxes = boxStates()
+        return withLock {
             var j = job
             if j.isNull == false, j.object == nil { j = .null }
-            return ["active_float": JSON(activeFloat), "output": .bool(ctl.outputEnabled && !releasing),
+            return ["active_float": JSON(activeFloat), "boxes": boxes, "output": .bool(ctl.outputEnabled && !releasing),
                     "blackout": .bool(blackout), "flashing": .array(flash.keys.sorted().map { .string($0) }),
                     "job": j, "sweep": sweep?.toJSON() ?? .null, "white_test": whiteTest,
                     "paused_for_rdm": .bool(pausedForRdm > 0), "hold": .bool(hold), "applying": .bool(applying != nil),
@@ -487,7 +522,7 @@ final class Engine {
 
     /// Back on screen: rebuild the frame from the current look first, then resume sending.
     func enterForeground() {
-        withLock { inBackground = false }
+        withLock { inBackground = false; activeSince = Engine.now() }  // re-check the box without crying wolf
         if !withLock({ releasing }) { ctl.setTargets(frames()) }
         ctl.suspended = false
     }

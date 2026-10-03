@@ -69,12 +69,16 @@ class Engine:
         self.job: Optional[dict] = None
         self._stop = threading.Event()
         threading.Thread(target=self._loop, name="engine", daemon=True).start()
+        self._active_since = 0.0
+        threading.Thread(target=self._watch_boxes, name="box-watch", daemon=True).start()
 
     # ------------------------------------------------------------ output control
     def set_active(self, fid: Optional[str], output: bool = True, keep_hold: bool = False):
         with self.lock:
             self._release_token = None  # going live cancels a Release that's still sending black
             self._releasing = False
+            if fid != self.active_float:
+                self._active_since = time.monotonic()
             self.active_float = fid
             self.flash.clear()
             self.special.clear()
@@ -146,9 +150,44 @@ class Engine:
             self.hold = bool(on)
         self.refresh()
 
+    BOX_CHECK_S = 2.0   # ask each live box "are you there?" this often
+    BOX_LOST_S = 5.0    # no answer for this long = not answering
+
+    def _watch_boxes(self):
+        """Live means a box actually answers, not just that we're sending: poll each box on the
+        active float directly (Art-Net ArtPoll, unicast) so a pulled cable shows up within seconds."""
+        from . import artnet
+        import logging
+        while not self._stop.wait(self.BOX_CHECK_S):
+            try:
+                for ip, port, _pa in self.frames_targets():
+                    self.ctl._send_quiet(artnet.build_poll(), ip, port)
+            except Exception:
+                logging.getLogger("scenebuilder.engine").exception("box watch")
+
+    def box_states(self) -> list:
+        """[{name, ip, state: ok | checking | down}] for the boxes on the active float."""
+        with self.store.lock:
+            fl = self.store.get_float(self.active_float) if self.active_float else None
+            boxes = [(b.get("name") or "Box", b["ip"]) for b in (fl or {}).get("boxes", []) if b.get("ip")]
+        now = time.time()
+        with self.ctl._lock:
+            seen = {}
+            for n in self.ctl.nodes.values():
+                for ip in (n.get("ip"), (n.get("from") or "").split(":")[0]):
+                    if ip:
+                        seen[ip] = max(seen.get(ip, 0), n.get("seen", 0))
+        young = time.monotonic() - self._active_since < self.BOX_LOST_S
+        out = []
+        for name, ip in boxes:
+            ok = now - seen.get(ip, 0) < self.BOX_LOST_S
+            out.append({"name": name, "ip": ip, "state": "ok" if ok else ("checking" if young else "down")})
+        return out
+
     def status(self) -> dict:
+        boxes = self.box_states()
         with self.lock:
-            return {"active_float": self.active_float,
+            return {"active_float": self.active_float, "boxes": boxes,
                     "output": self.ctl.output_enabled and not getattr(self, "_releasing", False),
                     "blackout": self.blackout, "flashing": list(self.flash.keys()),
                     "job": dict(self.job) if self.job else None,

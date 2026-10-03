@@ -294,6 +294,16 @@ final class ArtNetController {
             .sorted { ($0["ip"].string ?? "") < ($1["ip"].string ?? "") }
     }
 
+    /// When a box at this IP last answered a poll (0 = never).
+    func lastSeen(_ ip: String) -> Double {
+        lock.lock(); defer { lock.unlock() }
+        var t = 0.0
+        for n in nodes.values where n["ip"].string == ip || (n["from"].string ?? "").split(separator: ":").first.map(String.init) == ip {
+            t = max(t, n["seen"].number ?? 0)
+        }
+        return t
+    }
+
     /// Does a box answer an Art-Net poll sent straight to it?
     func alive(_ ip: String, _ port: Int, wait: TimeInterval = 0.8) -> Bool {
         let t0 = Date().timeIntervalSince1970

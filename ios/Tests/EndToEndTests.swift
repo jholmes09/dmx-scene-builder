@@ -193,6 +193,19 @@ final class EndToEndTests: XCTestCase {
         XCTAssertTrue(waitFor { self.dmx("012e2a03") == self.render("TW", 11, look["fx3"]) })
     }
 
+    func testLiveOnlyWhenTheBoxAnswers() {
+        api.engine.boxCheckS = 0.3
+        api.engine.boxLostS = 1.5
+        _ = ok("POST", "/api/output", ["action": "activate", "float_id": .string(fid)])
+        XCTAssertTrue(waitFor { self.status()["boxes"][0]["state"].string == "ok" }, status()["boxes"].serialize())
+        // Point the float at a box that isn't there: still sending, but never claims the box is there.
+        var fl = ok("GET", "/api/floats/\(fid)")
+        fl["boxes"][0]["udp_port"] = 9
+        _ = ok("PUT", "/api/floats/\(fid)", fl)
+        XCTAssertTrue(waitFor { self.status()["boxes"][0]["state"].string == "down" }, status()["boxes"].serialize())
+        XCTAssertEqual(status()["output"], true)
+    }
+
     func testReleaseSendsBlackThenStops() {
         _ = ok("POST", "/api/output", ["action": "activate", "float_id": .string(fid)])
         _ = ok("POST", "/api/floats/\(fid)/live", ["changes": ["fx3": ["dim": 1.0, "cct": 4000]]])
