@@ -29,7 +29,8 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
-          $v = (python -c "import re;print(re.search(r'__version__ = \"(.+?)\"', open('scenebuilder/__init__.py').read()).group(1))")
+          $v = [regex]::Match((Get-Content scenebuilder/__init__.py -Raw), '__version__ = "([^"]+)"').Groups[1].Value
+          if (-not $v) { throw "no version found" }
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$v" packaging\installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           Get-ChildItem dist
