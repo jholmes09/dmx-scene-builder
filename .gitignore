@@ -8,3 +8,7 @@ ios/DMXSceneBuilder.xcodeproj/xcuserdata/
 ios/DMXSceneBuilder.xcodeproj/project.xcworkspace/xcuserdata/
 ios/build/
 DerivedData/
+
+# Desktop-app builds
+/build/
+/dist/

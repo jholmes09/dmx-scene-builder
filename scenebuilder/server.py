@@ -17,12 +17,13 @@ from urllib.parse import urlparse, parse_qs
 from . import __version__, artnet, fixtures, rdm
 from .engine import Engine
 from .node import ArtNetController, RdmError, local_interfaces
+from .paths import resource_root
 from .reap import Reap, ReapError, uid_from_str as reap_uid, uid_to_str as reap_uid_str
 from .simulator import EBoxSimulator, demo_box
 from .store import Store, new_box, new_fixture, new_float, new_id, patch_problems
 
 log = logging.getLogger("scenebuilder.server")
-WEB = Path(__file__).resolve().parent.parent / "web"
+WEB = (resource_root() / "web").resolve()  # resolve: inside the macOS .app, web/ is a symlink
 
 
 class App:

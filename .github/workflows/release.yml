@@ -1,0 +1,126 @@
+name: release
+# Builds the double-click apps: "DMX Scene Builder Setup.exe" (Windows) and "DMX Scene Builder.dmg" (macOS).
+# Tag push v*  -> build, smoke-test, attach both files to a GitHub Release.
+# Manual run   -> build and smoke-test; the files are kept as workflow artifacts (no Release).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pyinstaller
+      - name: Build the app folder
+        run: python -m PyInstaller --noconfirm --distpath dist --workpath build packaging/DMXSceneBuilder.spec
+      - name: Smoke-test the built app
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\DMX Scene Builder\DMX Scene Builder.exe" -ArgumentList "--selftest","--selftest-out","$env:RUNNER_TEMP\selftest1.txt" -Wait -PassThru
+          Get-Content "$env:RUNNER_TEMP\selftest1.txt"
+          if ($p.ExitCode -ne 0) { throw "selftest exit code $($p.ExitCode)" }
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $v = (python -c "import re;print(re.search(r'__version__ = \"(.+?)\"', open('scenebuilder/__init__.py').read()).group(1))")
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$v" packaging\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          Get-ChildItem dist
+      - name: Smoke-test the installer (install, run, uninstall)
+        shell: pwsh
+        run: |
+          $dir = "$env:RUNNER_TEMP\dmx-installed"
+          $i = Start-Process -FilePath "dist\DMX Scene Builder Setup.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=`"$dir`"" -Wait -PassThru
+          if ($i.ExitCode -ne 0) { throw "installer exit code $($i.ExitCode)" }
+          $p = Start-Process -FilePath "$dir\DMX Scene Builder.exe" -ArgumentList "--selftest","--selftest-out","$env:RUNNER_TEMP\selftest2.txt" -Wait -PassThru
+          Get-Content "$env:RUNNER_TEMP\selftest2.txt"
+          if ($p.ExitCode -ne 0) { throw "installed selftest exit code $($p.ExitCode)" }
+          $u = Start-Process -FilePath "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES" -Wait -PassThru
+          if ($u.ExitCode -ne 0) { throw "uninstaller exit code $($u.ExitCode)" }
+      - name: Name the file for download
+        shell: pwsh
+        run: Copy-Item "dist\DMX Scene Builder Setup.exe" "dist\DMX-Scene-Builder-Setup.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/DMX-Scene-Builder-Setup.exe
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-latest
+    env:
+      # Developer ID signing + notarization turn on when these repo secrets exist; absent = ad-hoc signed.
+      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pyinstaller
+      - name: Import Developer ID certificate (only if configured)
+        if: ${{ env.APPLE_CERT_P12 != '' }}
+        run: |
+          KC="$RUNNER_TEMP/build.keychain-db"; KCPW="$(uuidgen)"
+          echo "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC"
+          security list-keychains -d user -s "$KC" login.keychain-db
+          ID=$(security find-identity -v -p codesigning "$KC" | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)".*/\1/')
+          test -n "$ID" || { echo "No Developer ID Application identity in the certificate"; exit 1; }
+          echo "SIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
+      - name: Build the app and the dmg
+        run: packaging/build_mac.sh
+      - name: Smoke-test the app inside the dmg
+        run: |
+          hdiutil attach "dist/DMX Scene Builder.dmg" -nobrowse -mountpoint /tmp/dmxvol
+          cp -R "/tmp/dmxvol/DMX Scene Builder.app" /tmp/DMXTest.app
+          hdiutil detach /tmp/dmxvol
+          lipo -archs "/tmp/DMXTest.app/Contents/MacOS/DMX Scene Builder"
+          codesign --verify --deep --strict /tmp/DMXTest.app
+          "/tmp/DMXTest.app/Contents/MacOS/DMX Scene Builder" --selftest --selftest-out /tmp/selftest.txt
+          cat /tmp/selftest.txt
+      - name: Name the file for download
+        run: cp "dist/DMX Scene Builder.dmg" dist/DMX-Scene-Builder.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/DMX-Scene-Builder.dmg
+          if-no-files-found: error
+
+  publish:
+    # Only for a tag push: attach both files to the GitHub Release for that tag.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - name: Create or update the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" files/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" files/* --repo "$GITHUB_REPOSITORY" --title "DMX Scene Builder $TAG" \
+              --notes "Download **DMX-Scene-Builder-Setup.exe** for Windows or **DMX-Scene-Builder.dmg** for Mac, then open it. No Python or Terminal needed. See the README for the first-open steps on each."
+          fi

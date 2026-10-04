@@ -9,16 +9,42 @@ themselves so the float can run with nothing connected at the parade.
 
 ## Quick start
 
+Download the installer from the [Releases page](https://github.com/jholmes09/dmx-scene-builder/releases/latest).
+No Python, Terminal or scripts needed.
+
+**Mac:** download **DMX-Scene-Builder.dmg**, open it, and drag **DMX Scene Builder** onto
+**Applications**. The first time, double-click it in Applications. Because the app isn't
+signed with an Apple Developer ID yet, macOS will say it can't verify it. Click **Done**, open
+**System Settings > Privacy & Security**, scroll down to the message about "DMX Scene Builder",
+click **Open Anyway**, and enter your Mac password. After that it opens normally. If macOS asks
+to find devices on your local network, click **Allow**; that's how it reaches the lights.
+
+**Windows:** download **DMX-Scene-Builder-Setup.exe** and double-click it. If a blue "Windows
+protected your PC" box appears, click **More info**, then **Run anyway**. The installer needs
+no administrator password. Open **DMX Scene Builder** from the Start menu (or the Desktop
+shortcut). The first time, Windows Firewall will ask about network access: tick **Private
+networks** and click **Allow access**, or the iPad and the lights can't reach it.
+
+A small window says "DMX Scene Builder is running" and shows the address to type into Safari
+on the iPad, for example `http://jeffs-laptop.local:8080`; the app also opens in your browser on
+this computer. Closing that window quits the app. Your floats are saved automatically and are
+kept when you update.
+
+### Run from source (developers)
+
 **Mac:** double-click **DMX Scene Builder.command** in this folder.
 **Windows:** double-click **DMX Scene Builder.bat**. If Windows has never run
 Python before, install it from python.org first (check "Add python.exe to
 PATH" during install), then double-click the .bat file again.
+Or: `python3 -m scenebuilder` (the terminal version) or `python3 -m scenebuilder.desktop`
+(the same window the installed app shows). On Windows, the first run may show a Firewall
+prompt for Python: tick **Private networks** and click Allow.
 
-On Windows, the first run may show a Windows Firewall prompt for Python. Tick
-**Private networks** and click Allow, or the iPad and the lights can't reach it.
+Either way, an address like `http://jeffs-laptop.local:8080` is shown. On the iPad, open it in Safari.
 
-Either way, a window opens and prints an address, something like
-`http://jeffs-laptop.local:8080`. On the iPad, open that address in Safari.
+Building the installers: `packaging/build_mac.sh` (macOS) and `packaging/installer.iss` (Inno
+Setup, after PyInstaller; see `.github/workflows/release.yml`). Pushing a tag like `v1.0.1`
+builds both and attaches them to a GitHub Release.
 
 If the computer has more than one active network connection, open the app's
 **Setup** and pick the right one under "Network adapter," so Art-Net goes out

@@ -14,10 +14,11 @@ from pathlib import Path
 
 from . import __version__
 from .node import ArtNetController, local_interfaces
+from .paths import resource_root
 from .server import App, make_server
 from .store import Store, DEFAULT_DIR
 
-DEMO = Path(__file__).resolve().parent.parent / "data" / "demo_project.json"
+DEMO = resource_root() / "data" / "demo_project.json"
 
 
 def main(argv=None):
