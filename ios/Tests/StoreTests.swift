@@ -75,6 +75,22 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(s.data["project"], "Untitled")
     }
 
+    func testBadAddressFromAScanDoesntBlockImport() throws {
+        let s = try Store(directory: dir, autosave: false)
+        var c = makeFloat("fl_c", "Charlie", fixtures: 2)
+        var fxs = c["fixtures"].arrayValue
+        fxs[0]["label"] = "Found 2a09"; fxs[0]["address"] = 513
+        fxs[1]["address"] = 10
+        c["fixtures"] = .array(fxs)
+        let incoming: JSON = ["floats": [c]]
+        let plan = try s.planMerge(incoming)
+        XCTAssertEqual(plan["warnings"].arrayValue.count, 1)
+        XCTAssertTrue(plan["warnings"][0].pyStr.contains("Found 2a09"))
+        let r = try s.applyMerge(incoming, [:])
+        XCTAssertEqual(r["added"], 1)
+        XCTAssertEqual(s.getFloat("fl_c")?["fixtures"].arrayValue.map { $0["address"] }, [.null, 10])
+    }
+
     func testMergeNeverDeletes() throws {
         let s = try Store(directory: dir, autosave: false)
         _ = try s.putFloat(makeFloat("fl_mine", "Only here"))

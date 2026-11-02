@@ -498,7 +498,7 @@ final class API {
         let fpVariant = (variant != nil && Fixtures.hasMode(variant!, mode)) ? variant! : "RGBW"
         let fp = try? Fixtures.footprint(fpVariant, mode)
         return ["uid": .string(Reap.uidToStr(d["d_uid"].pyStr)), "ok": true,
-                "address": .int(((try? d["dmx_a"].or(0).toInt()) ?? 0) + 1), "mode": .int(mode),
+                "address": reapAddress(d), "mode": .int(mode),
                 "personality": .int(mode), "personality_count": d["dmx_p_c"], "footprint": JSON(fp),
                 "label": .string((d["u_l"].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)),
                 "model": d["d_l"].or(""), "variant_guess": JSON(variant),
@@ -537,7 +537,7 @@ final class API {
                 var fxs = f["fixtures"].arrayValue
                 for i in fxs.indices {
                     guard let d = known[fxs[i]["uid"].string ?? ""], fxs[i]["box_id"].pyStr == boxId, fxs[i]["address"].isNull else { continue }
-                    fxs[i]["address"] = .int(((try? d["dmx_a"].or(0).toInt()) ?? 0) + 1)
+                    fxs[i]["address"] = reapAddress(d)
                     let m = (try? d["dmx_p"].or(1).toInt()) ?? 1
                     if Fixtures.hasMode(fxs[i]["variant"].string ?? "", m) || m == Fixtures.saveMode { fxs[i]["mode"] = .int(m) }
                     changed += 1
@@ -649,7 +649,7 @@ final class API {
         cacheSet(ip, uid, dev)
         engine.refresh()
         try? store.flush()
-        let info: JSON = ["address": .int(((try? dev["dmx_a"].or(0).toInt()) ?? 0) + 1),
+        let info: JSON = ["address": reapAddress(dev),
                           "mode": .int((try? dev["dmx_p"].or(1).toInt()) ?? 1),
                           "personality": .int((try? dev["dmx_p"].or(1).toInt()) ?? 1)]
         return .json(["ok": true, "uid": .string(uid), "info": info, "rev": .int(store.rev)])
@@ -864,7 +864,7 @@ final class API {
                 for fx in failed {
                     let uid = fx["uid"].pyStr
                     if let d = actual[uid] {
-                        writeBack(fid, uid, address: .int(((try? d["dmx_a"].or(0).toInt()) ?? 0) + 1),
+                        writeBack(fid, uid, address: reapAddress(d),
                                   mode: (try? d["dmx_p"].or(1).toInt()) ?? 1)
                     } else {
                         writeBack(fid, uid, address: .null)
@@ -885,4 +885,14 @@ final class API {
         guard let f = fl else { return Response(status: 404, contentType: "text/html; charset=utf-8", body: Data("<h1>Not found</h1>".utf8)) }
         return Response(status: 200, contentType: "text/html; charset=utf-8", body: Data(PatchSheet.render(project: project, fl: f, cal: cal).utf8))
     }
+}
+
+
+/// The light's DMX address from the box's web page, or null when it has no valid one yet
+/// (a brand-new light can report 0 or 513+; that must never land in the patch).
+func reapAddress(_ d: JSON) -> JSON {
+    // Not .or(): that treats 0 (address 1) as missing, like Python's `or`.
+    guard !d["dmx_a"].isNull, let a0 = try? d["dmx_a"].toInt() else { return .null }
+    let a = a0 + 1
+    return (1...512).contains(a) ? .int(a) : .null
 }

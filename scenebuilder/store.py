@@ -224,6 +224,7 @@ class Store:
         if not isinstance(data, dict) or not isinstance(data.get("floats"), list):
             raise ValueError("Not a DMX Scene Builder project file")
         data.setdefault("palette", [])
+        clean_addresses(data)
         for fl in data["floats"]:
             for key in ("boxes", "fixtures", "looks"):
                 fl.setdefault(key, [])
@@ -260,6 +261,8 @@ class Store:
         never touched by the merge, so combining two computers' work never deletes anything."""
         if not isinstance(incoming, dict) or not isinstance(incoming.get("floats"), list):
             raise ValueError("Not a DMX Scene Builder project file")
+        incoming = copy.deepcopy(incoming)
+        warnings = clean_addresses(incoming)
         with self.lock:
             mine_by_id = {f["id"]: f for f in self.data["floats"]}
         new, identical, conflicts = [], [], []
@@ -276,7 +279,7 @@ class Store:
             else:
                 conflicts.append({"id": fid, "code": fl.get("code", ""), "name": fl.get("name", ""),
                                   "mine": _float_summary(mine), "theirs": summary})
-        return {"new": new, "identical": identical, "conflicts": conflicts}
+        return {"new": new, "identical": identical, "conflicts": conflicts, "warnings": warnings}
 
     def apply_merge(self, incoming: dict, resolutions: dict) -> dict:
         """Add floats the other computer has that this one doesn't, and replace only the
@@ -285,6 +288,7 @@ class Store:
         if not isinstance(incoming, dict) or not isinstance(incoming.get("floats"), list):
             raise ValueError("Not a DMX Scene Builder project file")
         added, replaced = 0, 0
+        clean_addresses(incoming)
         with self.lock:
             mine_by_id = {f["id"]: f for f in self.data["floats"]}
             incoming.setdefault("palette", [])
@@ -353,6 +357,26 @@ HOSTNAME = socket.gethostname().split(".")[0]
 def _floats_equal(a: dict, b: dict) -> bool:
     strip = lambda f: {k: v for k, v in f.items() if k not in ("rev", "updated", "edited_on")}
     return json.dumps(strip(a), sort_keys=True) == json.dumps(strip(b), sort_keys=True)
+
+
+def clean_addresses(project: dict) -> list:
+    """A light a scan added before it had a valid address (e.g. a brand-new light reporting 0 or
+    513+) must not block a whole import: clear that address and say which light needs one."""
+    notes = []
+    for fl in project.get("floats") or []:
+        for fx in fl.get("fixtures") or []:
+            a = fx.get("address")
+            if a in ("", None):
+                continue
+            try:
+                ok = 1 <= int(a) <= 512
+            except (TypeError, ValueError):
+                ok = False
+            if not ok:
+                fx["address"] = None
+                notes.append("%s: %s had address %s, now blank. Set it on the Patch tab."
+                             % (fl.get("name") or fl.get("code") or "?", fx.get("label") or "?", a))
+    return notes
 
 
 def validate_float(fl: dict):

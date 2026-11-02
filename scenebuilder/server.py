@@ -127,7 +127,7 @@ class App:
                 for fx in fl["fixtures"]:
                     d = self.reap_devices[ip].get(fx.get("uid") or "")
                     if d is not None and fx.get("box_id") == box_id and fx.get("address") is None:
-                        fx["address"] = int(d.get("dmx_a", 0)) + 1
+                        fx["address"] = reap_address(d)
                         m = int(d.get("dmx_p") or 1)
                         if m in fixtures.MODES.get(fx["variant"], {}) or m == fixtures.SAVE_MODE:
                             fx["mode"] = m
@@ -300,6 +300,15 @@ def reap_variant(mode: int):
     return "RGBW"
 
 
+def reap_address(d: dict):
+    """The light's DMX address from the box's web page, or None when it has no valid one yet."""
+    try:
+        a = int(d.get("dmx_a", -1)) + 1
+    except (TypeError, ValueError):
+        return None
+    return a if 1 <= a <= 512 else None
+
+
 def reap_scan_entry(d: dict) -> dict:
     mode = int(d.get("dmx_p") or 1)
     variant = reap_variant(mode)
@@ -309,7 +318,7 @@ def reap_scan_entry(d: dict) -> dict:
         fp = fixtures.footprint(variant if variant and mode in fixtures.MODES[variant] else "RGBW", mode)
     except ValueError:
         pass
-    return {"uid": reap_uid_str(d["d_uid"]), "ok": True, "address": int(d.get("dmx_a", 0)) + 1, "mode": mode,
+    return {"uid": reap_uid_str(d["d_uid"]), "ok": True, "address": reap_address(d), "mode": mode,
             "personality": mode, "personality_count": d.get("dmx_p_c"), "footprint": fp,
             "label": (d.get("u_l") or "").strip(), "model": d.get("d_l") or "", "variant_guess": variant,
             "modes_available": avail, "kind": "fixture", "via": "reap", "terminator": d.get("dmx_t")}

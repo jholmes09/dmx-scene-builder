@@ -55,6 +55,21 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(self.store.get_float(self.a["id"])["fixtures"][0]["address"], 99)
         self.assertEqual(self.store.get_float(self.b["id"])["name"], "Bravo")
 
+    def test_bad_address_from_a_scan_doesnt_block_import(self):
+        # A light added by a scan before it had an address (here 513) on the other iPad.
+        c = make("C", "Charlie")
+        c["fixtures"][0]["label"] = "Found 2a09"
+        c["fixtures"][0]["address"] = 513
+        c["fixtures"][1]["address"] = 10
+        plan = self.store.plan_merge({"floats": [c]})
+        self.assertEqual(len(plan["warnings"]), 1)
+        self.assertIn("Found 2a09", plan["warnings"][0])
+        self.assertEqual(c["fixtures"][0]["address"], 513, "planning doesn't change their file")
+        r = self.store.apply_merge({"floats": [c]}, {})
+        self.assertEqual(r["added"], 1)
+        got = [f for f in self.store.data["floats"] if f["id"] == c["id"]][0]
+        self.assertEqual([f["address"] for f in got["fixtures"]], [None, 10])
+
     def test_bad_file_rejected(self):
         with self.assertRaises(ValueError):
             self.store.plan_merge({"nope": 1})

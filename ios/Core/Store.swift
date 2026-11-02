@@ -224,11 +224,38 @@ final class Store {
         return true
     }
 
+    /// A light a scan added before it had a valid address (0 or 513+) must not block a whole
+    /// import: clear that address and say which light needs one.
+    @discardableResult
+    static func cleanAddresses(_ project: inout JSON) -> [String] {
+        var notes: [String] = []
+        var floats = project["floats"].arrayValue
+        for i in floats.indices {
+            var fxs = floats[i]["fixtures"].arrayValue
+            var changed = false
+            for j in fxs.indices {
+                let a = fxs[j]["address"]
+                if a.isNull || a.string == "" { continue }
+                let n = try? a.toInt("address")
+                if n == nil || !(1...512).contains(n!) {
+                    fxs[j]["address"] = .null
+                    changed = true
+                    let fname = floats[i]["name"].string ?? floats[i]["code"].string ?? "?"
+                    notes.append("\(fname): \(fxs[j]["label"].string ?? "?") had address \(a.pyStr), now blank. Set it on the Patch tab.")
+                }
+            }
+            if changed { floats[i]["fixtures"] = .array(fxs) }
+        }
+        if !notes.isEmpty { project["floats"] = .array(floats) }
+        return notes
+    }
+
     func replaceProject(_ incoming: JSON) throws {
         guard incoming.object != nil, incoming["floats"].array != nil else {
             throw AppError.value("Not a DMX Scene Builder project file")
         }
         var d = incoming
+        Store.cleanAddresses(&d)
         d.setDefault("palette", [])
         var floats = d["floats"].arrayValue
         for i in floats.indices {
@@ -268,10 +295,12 @@ final class Store {
 
     // ------------------------------------------------------------ merge import
     /// Compare another device's project file against this one, float by float. Never mutates anything.
-    func planMerge(_ incoming: JSON) throws -> JSON {
-        guard incoming.object != nil, incoming["floats"].array != nil else {
+    func planMerge(_ incomingIn: JSON) throws -> JSON {
+        guard incomingIn.object != nil, incomingIn["floats"].array != nil else {
             throw AppError.value("Not a DMX Scene Builder project file")
         }
+        var incoming = incomingIn
+        let warnings = Store.cleanAddresses(&incoming)
         let mine = withLock { Dictionary(data["floats"].arrayValue.compactMap { f in f["id"].string.map { ($0, f) } },
                                          uniquingKeysWith: { a, _ in a }) }
         var new: [JSON] = [], identical: [JSON] = [], conflicts: [JSON] = []
@@ -287,15 +316,18 @@ final class Store {
                 }
             } else { new.append(summary) }
         }
-        return ["new": .array(new), "identical": .array(identical), "conflicts": .array(conflicts)]
+        return ["new": .array(new), "identical": .array(identical), "conflicts": .array(conflicts),
+                "warnings": .array(warnings.map { .string($0) })]
     }
 
     /// Add floats this device doesn't have, replace only floats explicitly resolved "theirs".
     /// Everything else, including every float not mentioned in `incoming`, is left exactly as it is.
-    func applyMerge(_ incoming: JSON, _ resolutions: JSON) throws -> JSON {
-        guard incoming.object != nil, incoming["floats"].array != nil else {
+    func applyMerge(_ incomingIn: JSON, _ resolutions: JSON) throws -> JSON {
+        guard incomingIn.object != nil, incomingIn["floats"].array != nil else {
             throw AppError.value("Not a DMX Scene Builder project file")
         }
+        var incoming = incomingIn
+        Store.cleanAddresses(&incoming)
         lock.lock(); defer { lock.unlock() }
         // Validate everything first so a bad float can't leave a half-applied import.
         var staged = data

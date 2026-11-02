@@ -1350,6 +1350,7 @@ async function startMerge(incoming) {
   for (const c of plan.conflicts) resolutions[c.id] = (c.theirs.updated || 0) > (c.mine.updated || 0) ? "theirs" : "mine";
   const when = (x) => x.updated ? new Date(x.updated * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) + (x.edited_on ? " · " + x.edited_on : "") : "no edit time";
   const body = h("div");
+  if ((plan.warnings || []).length) body.append(h("div", { class: "note warn" }, h("strong", null, "Lights that need an address:"), plan.warnings.map(w => h("div", null, w))));
   if (plan.new.length) body.append(h("div", { class: "note ok" }, `Add ${plan.new.length}: ` + plan.new.map(f => f.name).join(", ")));
   if (plan.identical.length) body.append(h("p", { class: "hint" }, `${plan.identical.length} already match.`));
   if (plan.conflicts.length) {
