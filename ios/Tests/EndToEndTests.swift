@@ -186,11 +186,22 @@ final class EndToEndTests: XCTestCase {
         XCTAssertTrue(waitFor { self.dmx("012e2a03")[1] == 0 })
         _ = ok("POST", "/api/floats/\(fid)/looks/\(lk["id"].string!)/recall")
         XCTAssertTrue(waitFor { self.dmx("012e2a03") == self.render("TW", 11, look["fx3"]) })
+        // A look saved before a light was added: recalling it leaves that light as it is.
+        store.withLock { _ = store.updateFloat(fid) { f in
+            var looks = f["looks"].arrayValue
+            var st = looks[0]["states"].objectValue; st.removeValue(forKey: "fx3"); looks[0]["states"] = .object(st)
+            f["looks"] = .array(looks)
+        } }
+        _ = ok("POST", "/api/floats/\(fid)/live", ["changes": ["fx3": ["dim": 0]]])
+        XCTAssertTrue(waitFor { self.dmx("012e2a03")[1] == 0 })
+        _ = ok("POST", "/api/floats/\(fid)/looks/\(lk["id"].string!)/recall")
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(dmx("012e2a03")[1], 0, "light not in the look kept its state")
         // Blackout and back.
         _ = ok("POST", "/api/output", ["action": "blackout", "on": true])
         XCTAssertTrue(waitFor { self.dmx("012e2a03")[1] == 0 && self.dmx("012e2a03")[2] == 0 })
         _ = ok("POST", "/api/output", ["action": "blackout", "on": false])
-        XCTAssertTrue(waitFor { self.dmx("012e2a03") == self.render("TW", 11, look["fx3"]) })
+        XCTAssertTrue(waitFor { self.dmx("012e2a04") == self.render("TW", 11, look["fx4"]) })
     }
 
     func testLiveOnlyWhenTheBoxAnswers() {

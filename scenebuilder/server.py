@@ -590,7 +590,10 @@ class Handler(BaseHTTPRequestHandler):
             if len(rest) == 3 and rest[0] == "looks" and rest[2] == "recall" and method == "POST":
                 with store.lock:
                     look = next(l for l in fl["looks"] if l["id"] == rest[1])
-                    fl["live"] = json.loads(json.dumps(look["states"]))
+                    # Lights the look doesn't know (added after it was saved) keep what they show.
+                    live = dict(fl.get("live") or {})
+                    live.update(json.loads(json.dumps(look["states"])))
+                    fl["live"] = live
                     store.mark_dirty(fl)
                 eng.refresh()
                 return self._json({"ok": True})

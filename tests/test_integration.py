@@ -137,6 +137,17 @@ class IntegrationTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: m0.dmx[1] == 0))
         self.api.call("POST", "/api/floats/%s/looks/%s/recall" % (fl["id"], look["id"]))
         self.assertTrue(wait_for(lambda: m0.dmx == bytes([0, 255, 255])))
+        # A look saved before a light was added: recalling it leaves that light as it is.
+        with self.store.lock:
+            f = self.store.get_float(fl["id"])
+            lk = next(l for l in f["looks"] if l["id"] == look["id"])
+            lk["states"].pop("tw0")
+        self.api.call("POST", "/api/floats/%s/live" % fl["id"], {"changes": {"tw0": {"dim": 0.0}}})
+        self.assertTrue(wait_for(lambda: m0.dmx[1] == 0))
+        self.api.call("POST", "/api/floats/%s/looks/%s/recall" % (fl["id"], look["id"]))
+        time.sleep(0.3)
+        self.assertEqual(self.store.get_float(fl["id"])["live"]["tw0"]["dim"], 0.0)
+        self.assertEqual(m0.dmx[1], 0)
 
         # Save into fixtures: only Mode 7 fixtures accepted
         job = self.api.call("POST", "/api/floats/%s/save" % fl["id"], {"fixture_ids": ["rgb0", "rgb1", "tw0"]})

@@ -368,7 +368,10 @@ final class API {
             try store.withLock {
                 try store.updateFloat(fid) { f in
                     guard let look = f["looks"].arrayValue.first(where: { $0["id"].string == r[1] }) else { throw AppError.key("look not found") }
-                    f["live"] = look["states"]
+                    // Lights the look doesn't know (added after it was saved) keep what they show.
+                    var live = f["live"].object ?? [:]
+                    for (k, v) in look["states"].object ?? [:] { live[k] = v }
+                    f["live"] = .object(live)
                 }
                 store.markDirty(fid)
             }

@@ -735,8 +735,16 @@ function looksCard(fl) {
     } }, "Save look")));
   card.append(h("div", { class: "looks-bar" }, fl.looks.map(l => h("div", { class: "look-chip" },
     h("button", { onclick: async () => {
-      await api("POST", `/api/floats/${fl.id}/looks/${l.id}/recall`);
-      fl.live = JSON.parse(JSON.stringify(l.states)); renderMain();
+      // A look is per light: if none of its lights are in this float's patch, say so instead of doing nothing.
+      const ids = new Set(fl.fixtures.map(f => f.id));
+      const hits = Object.keys(l.states || {}).filter(id => ids.has(id)).length;
+      if (!hits) { toast(`“${l.name}” was saved for lights that aren't in this float's patch any more.`, "bad"); return; }
+      try {
+        await ensureLive(fl);  // tapping a look takes control, like any other control
+        await api("POST", `/api/floats/${fl.id}/looks/${l.id}/recall`);
+        fl.live = Object.assign({}, fl.live, JSON.parse(JSON.stringify(l.states))); renderMain();
+        toast(isLive(fl) ? `“${l.name}” is up` : `“${l.name}” loaded, but nothing is being sent: check the box IP on Patch.`, isLive(fl) ? "ok" : "bad");
+      } catch (e) { toast(e.message, "bad"); }
     } }, l.name),
     h("button", { class: "more", onclick: () => lookMenu(fl, l) }, "⋯")))));
   return card;
