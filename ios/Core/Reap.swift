@@ -77,16 +77,20 @@ final class Reap {
     }
 
     // ------------------------------------------------------------ RDM through the box
+    /// Same light reported twice in the last search: a sign of a noisy cable run.
+    private(set) var lastRepeats = 0
+
     func discover(timeout: TimeInterval = 25.0) throws -> [JSON] {
         try post("rdm_test")
         var found: [String: JSON] = [:]
+        lastRepeats = 0
         var order: [String] = []
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             let r = try post("ds_get_device")
             if r["d_uid"].truthy {
                 let k = r["d_uid"].pyStr
-                if found[k] == nil { order.append(k) }
+                if found[k] == nil { order.append(k) } else { lastRepeats += 1 }
                 found[k] = r
             }
             if r["disc_done"].number == 1 { return order.map { found[$0]! } }
@@ -147,6 +151,68 @@ final class Reap {
         let od = outputData ?? (cur["ic_od"].string == "enabled")
         let r = try post("oth_s", [("dmxh", hold ? "0" : "1"), ("ebm", pt ? "1" : "0"), ("ic_od", od ? "1" : "0")])
         if r["status"] != .int(0) { throw AppError.runtime("The box didn't confirm the setting (status \(r["status"].pyStr)).") }
+    }
+
+    /// Option lists exactly as the box's own settings page offers them (index = value written).
+    static let dmxInputs = ["wired DMX", "wireless DMX", "wireless out DMX", "ethernet"]
+    static let ethModes = ["Art-NET", "sACN", "gMA I", "gMA II"]
+
+    /// The box may report a setting as its index or its label; return the index, or nil.
+    static func optionIndex(_ value: JSON, _ options: [String]) -> Int? {
+        let asInt: Int?
+        switch value {
+        case .null: return nil
+        case .string(let s):
+            if s.isEmpty { return nil }
+            asInt = Int(s.trimmingCharacters(in: .whitespacesAndNewlines))
+        case .int, .double, .bool: asInt = value.int
+        default: asInt = nil
+        }
+        if let i = asInt { return (0..<options.count).contains(i) ? i : nil }
+        let low = value.pyStr.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return options.firstIndex { $0.lowercased() == low }
+    }
+
+    /// {'dmxa': box DMX address, 'dmxi': DMX input, 'rdmn': box label}
+    func dmxSettings() throws -> JSON { try post("set_dmx") }
+
+    /// {'ip', 'netm', 'ethm': Ethernet mode, 'igmpt'}
+    func ethSettings() throws -> JSON { try post("eth_s") }
+
+    func setDmxInput(_ index: Int) throws {
+        let cur = try dmxSettings()
+        guard let dmxa = try? cur["dmxa"].toInt() else {
+            throw AppError.runtime("Couldn't read the box's DMX settings, so nothing was changed.")
+        }
+        let rdmn = String((cur["rdmn"].truthy ? cur["rdmn"].pyStr : "").prefix(32))
+        let r = try post("set_dmx", [("dmxa", String(dmxa)), ("dmxi", String(index)), ("rdmn", rdmn)])
+        if r["status"] != .int(0) {
+            throw AppError.runtime("The box didn't confirm the DMX input change (status \(r["status"].pyStr)).")
+        }
+    }
+
+    static func isIPv4(_ s: String) -> Bool {
+        let parts = s.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 4 && parts.allSatisfy { p in
+            !p.isEmpty && p.count <= 3 && p.allSatisfy { $0.isASCII && $0.isNumber } && (Int(p) ?? 256) <= 255
+                && !(p.count > 1 && p.first == "0")
+        }
+    }
+
+    /// Change only the Ethernet mode. The box's IP and mask are sent back exactly as read, and
+    /// nothing is written unless the box reports the IP we are talking to.
+    func setEthMode(_ index: Int) throws {
+        let cur = try ethSettings()
+        let ip = cur["ip"].truthy ? cur["ip"].pyStr : "", netm = cur["netm"].truthy ? cur["netm"].pyStr : ""
+        guard Reap.isIPv4(ip), Reap.isIPv4(netm) else {
+            throw AppError.runtime("Couldn't read the box's network settings, so nothing was changed.")
+        }
+        if ip != self.ip { throw AppError.runtime("The box reports IP \(ip), not \(self.ip), so nothing was changed.") }
+        let igmpt = Reap.optionIndex(cur["igmpt"], ["off"] + (1...10).map { "\($0) s" }) ?? 0
+        let r = try post("eth_s", [("ip", ip), ("netm", netm), ("ethm", String(index)), ("igmpt", String(igmpt))])
+        if r["status"] != .int(0) {
+            throw AppError.runtime("The box didn't confirm the Ethernet mode change (status \(r["status"].pyStr)).")
+        }
     }
 
     func restart() {

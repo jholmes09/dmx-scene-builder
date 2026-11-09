@@ -82,6 +82,10 @@ class FakeBox:
         self.drop_next = set()        # d_uids the next discovery misses
         self.restart_s = 1.5
         self.ic_od = "enabled"
+        self.ebm = "pass-through"
+        self.dmxi = "ethernet"
+        self.ethm = "Art-NET"
+        self.writes = []              # (path, q) of every settings write
         self.queue, self.pending = [], None
         self.after = None             # hook(path, q, out) run before each answer
         self.log = []                 # (time, path, q)
@@ -160,9 +164,23 @@ class FakeBox:
             self.pending = None
             return {"d_uid": p["d_uid"], "err": p["err"]}
         if path == "oth_s":
+            if q:
+                self.writes.append((path, q))
             if "ic_od" in q:
                 self.ic_od = "enabled" if q["ic_od"] == "1" else "disabled"
-            return {"dmxh": "on", "ebm": "pass-through", "ic_od": self.ic_od, "status": 0}
+            if "ebm" in q:
+                self.ebm = "pass-through" if q["ebm"] == "1" else "standard"
+            return {"dmxh": "on", "ebm": self.ebm, "ic_od": self.ic_od, "status": 0}
+        if path == "set_dmx":
+            if q:
+                self.writes.append((path, q))
+                self.dmxi = ["wired DMX", "wireless DMX", "wireless out DMX", "ethernet"][int(q["dmxi"])]
+            return {"dmxa": "1", "dmxi": self.dmxi, "rdmn": "Fake box", "status": 0}
+        if path == "eth_s":
+            if q:
+                self.writes.append((path, q))
+                self.ethm = ["Art-NET", "sACN", "gMA I", "gMA II"][int(q["ethm"])]
+            return {"ip": "127.0.0.1", "netm": "255.0.0.0", "ethm": self.ethm, "igmpt": "off", "status": 0}
         if path == "sys_res":
             self.go_offline("refuse")
             threading.Timer(self.restart_s, self.go_online).start()
@@ -716,6 +734,100 @@ class RestartTests(StressBase):
         on_disk = json.loads(st.path.read_text())
         fl = next(f for f in on_disk["floats"] if f["id"] == self.fid)
         self.assertEqual([f["mode"] for f in fl["fixtures"]], [7, 7, 7, 7])
+
+
+
+# ---------------------------------------------------------------------------- box settings check
+class BoxCheckTests(StressBase):
+    def check(self):
+        r = self.call("POST", "/api/floats/%s/check_box" % self.fid, {"box_id": self.bid})
+        self.assertEqual(r.code, 200, r)
+        return r.body
+
+    def test_wrong_box_settings_are_named_and_fixed(self):
+        self.box.dmxi, self.box.ethm, self.box.ebm = "wired DMX", "sACN", "standard"
+        c = self.check()
+        self.assertFalse(c["ok"])
+        keys = {x["key"]: x for x in c["issues"]}
+        for k in ("dmx_input", "eth_mode", "pass_through"):
+            self.assertEqual(keys[k]["fix"], "box", c)
+        self.assertIn("wired DMX", keys["dmx_input"]["text"])
+        r = self.scan()   # Pass-Thr off blocks the scan with the reason, not a silent empty list
+        self.assertEqual(r.code, 400, r)
+        self.assertIn("Pass-Thr", r.error)
+        self.box.restart_s = 0.5
+        r = self.call("POST", "/api/floats/%s/fix_box" % self.fid, {"box_id": self.bid})
+        self.assertEqual(r.code, 200, r)
+        self.assertTrue(r.body["restarting"])
+        self.assertEqual(sorted(r.body["fixed"]), ["dmx_input", "eth_mode", "pass_through"])
+        eth = [q for p, q in self.box.writes if p == "eth_s"][0]
+        self.assertEqual((eth["ip"], eth["netm"]), ("127.0.0.1", "255.0.0.0"))   # network settings sent back unchanged
+        time.sleep(1.0)
+        c = self.check()
+        self.assertTrue(c["ok"], c)
+        self.assertEqual((self.box.dmxi, self.box.ethm, self.box.ebm), ("ethernet", "Art-NET", "pass-through"))
+        self.assertEqual(self.scan().code, 200)
+
+    def test_universe_mismatch_is_fixed_in_the_app(self):
+        fl = self.float()
+        fl["boxes"][0]["universe"] = 3
+        self.call("PUT", "/api/floats/" + self.fid, fl)
+        c = self.check()
+        uni = [x for x in c["issues"] if x["key"] == "universe"]
+        self.assertTrue(uni, c)
+        self.assertEqual(uni[0]["fix"], "app")
+        self.assertIn("0:0:0", uni[0]["text"])
+        r = self.call("POST", "/api/floats/%s/fix_box" % self.fid, {"box_id": self.bid})
+        self.assertEqual(r.body["fixed"], ["universe"])
+        self.assertFalse(r.body["restarting"])
+        self.assertEqual(self.float()["boxes"][0]["universe"], 0)
+        self.assertEqual(self.box.writes, [])   # nothing written to the box
+
+    def test_two_boxes_on_one_ip_refuse_to_scan(self):
+        fl = self.float()
+        fl["boxes"].append(dict(fl["boxes"][0], id="box_twin", name="E-Box B"))
+        self.call("PUT", "/api/floats/" + self.fid, fl)
+        r = self.call("POST", "/api/floats/%s/scan_all" % self.fid, {})
+        self.assertEqual(r.code, 200, r)
+        for bid in (self.bid, "box_twin"):
+            self.assertIn("both set to 127.0.0.1", r.body["results"][bid]["error"])
+
+    def test_scan_all_searches_boxes_at_the_same_time(self):
+        fl = self.float()
+        fl["boxes"].append(dict(fl["boxes"][0], id="box_b", name="E-Box B", ip="127.0.0.9"))
+        self.call("PUT", "/api/floats/" + self.fid, fl)
+        app = self.srv.app
+        busy, peak = [0], [0]
+        lock = threading.Lock()
+
+        def slow(fl, bid, flush=False):
+            with lock:
+                busy[0] += 1
+                peak[0] = max(peak[0], busy[0])
+            time.sleep(1.0)
+            with lock:
+                busy[0] -= 1
+            return {"box_id": bid, "devices": []}
+        app._scan_box = slow
+        t0 = time.time()
+        r = self.call("POST", "/api/floats/%s/scan_all" % self.fid, {})
+        self.assertEqual(sorted(r.body["results"]), sorted([self.bid, "box_b"]))
+        self.assertEqual(peak[0], 2)
+        self.assertLess(time.time() - t0, 1.8)
+
+    def test_misaddressed_mode7_light_never_gets_save_or_demo_values(self):
+        # The real light D sits in Mode 7 at ch 32, inside L3's block (31-34). The patch doesn't
+        # know, so L3's dim green byte (5 = "factory demo") lands on D's control channel.
+        d = self.box.mod(D)
+        with self.sim.lock:
+            d.mode, d.address = 7, 32
+        self.call("POST", "/api/floats/%s/live" % self.fid, {"changes": {"fx3": {"dim": 0.02, "kind": "color", "hue": 120, "sat": 1}}})
+        self.assertEqual(self.scan().code, 200)
+        self.go_live()
+        time.sleep(0.5)
+        with self.sim.lock:
+            frame = self.sim.last_dmx
+        self.assertEqual(frame[31], 0, "control channel of the misaddressed light held at 0")
 
 
 if __name__ == "__main__":

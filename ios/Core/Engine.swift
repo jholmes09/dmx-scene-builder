@@ -55,6 +55,7 @@ final class Engine {
     var flash: [String: Double] = [:]      // fixture id -> until (monotonic)
     var special: [String: Int] = [:]       // fixture id -> Special functions byte override
     var dark = Set<String>()               // fixture ids forced dark (check step)
+    var guards: [String: Set<Int>] = [:]   // box id -> real Mode 7 lights' Special byte positions (from Scan)
     var sweep: Sweep?
     var whiteTest: JSON = .null            // {"method", "k", "mix"}
     private var pausedForRdm = 0
@@ -96,6 +97,24 @@ final class Engine {
             }
             Thread.sleep(forTimeInterval: boxCheckS)
         }
+    }
+
+    /// Remember the Special-channel position of every real Mode 7 light a Scan found on this box.
+    func setGuard(_ boxId: String, _ devices: [JSON]) {
+        var chans = Set<Int>()
+        for d in devices {
+            if d["ok"].truthy, let a = d["address"].int, d["address"].truthy, d["mode"].int == Fixtures.saveMode, (1...512).contains(a) {
+                chans.insert(a - 1)  // Special is the first channel of Mode 7
+            }
+        }
+        withLock {
+            if chans.isEmpty { guards.removeValue(forKey: boxId) } else { guards[boxId] = chans }
+        }
+        refresh()
+    }
+
+    func clearGuard(_ boxIds: [String]) {
+        withLock { for b in boxIds { guards.removeValue(forKey: b) } }
     }
 
     /// [{name, ip, state: ok | checking | down}] for the boxes on the active float.
@@ -268,7 +287,20 @@ final class Engine {
         // may put a non-zero value there.
         let saving = job["state"].string == "running" && !job["abort"].truthy
         let darkAll = blackout || sweep != nil
-        for (t, i, v) in specials { out[t]![i] = (darkAll || !saving) ? 0 : UInt8(v & 0xFF) }
+        var ours = Set<String>()
+        for (t, i, v) in specials {
+            out[t]![i] = (darkAll || !saving) ? 0 : UInt8(v & 0xFF)
+            ours.insert("\(t.ip)|\(t.port)|\(t.pa)|\(i)")
+        }
+        // Real lights the last Scan found in Mode 7 at addresses the patch doesn't use: their
+        // Special byte is held at 0 too, so another light's colour can't make them save a look,
+        // show the saved look, or switch to the factory demo.
+        for (bid, chans) in guards {
+            guard let b = boxes[bid] else { continue }
+            let t = Engine.target(b)
+            guard out[t] != nil else { continue }
+            for i in chans where !ours.contains("\(t.ip)|\(t.port)|\(t.pa)|\(i)") { out[t]![i] = 0 }
+        }
         return out
     }
 

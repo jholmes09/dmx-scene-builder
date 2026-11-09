@@ -115,7 +115,10 @@
 <tr><td>Find</td><td>Search the network for E-Boxes. Pick one to use it.</td></tr>
 <tr><td>IP</td><td>The box's address. Set once.</td></tr>
 <tr><td>Net · Sub · Uni</td><td>Must match the box. Normally 0 · 0 · 0.</td></tr>
-<tr><td>Scan</td><td>Read the lights plugged into the box.</td></tr>
+<tr><td>Check</td><td>Read the box's settings and say what's wrong. Scan does this too.</td></tr>
+<tr><td>Fix</td><td>Shown when Check finds a problem. Corrects the settings (the box restarts, about 10 s).</td></tr>
+<tr><td>Scan</td><td>Read the lights plugged into the box. Says how many it found out of how many it expected.</td></tr>
+<tr><td>Scan all boxes</td><td>Floats with two boxes: scan both at once.</td></tr>
 <tr><td>Type / Mode / Address</td><td>Set per light in the list.</td></tr>
 <tr><td>Send addresses to fixtures</td><td>Write the list's addresses and modes into the real lights. Shown after a Scan.</td></tr>
 <tr><td>Identify</td><td>Flash that light.</td></tr>
@@ -176,6 +179,9 @@
 <tr><td>Box not answering</td><td>Box power on? Network cable in? iPad on the right network?</td></tr>
 <tr><td>Live but lights don't change</td><td>Net · Sub · Uni match the box? Box on Play saved look? Press Back to app control.</td></tr>
 <tr><td>Go live says the box is playing its saved look</td><td>Save tab &gt; Back to app control.</td></tr>
+<tr><td>"The real lights don't match the app"</td><td>Press <strong>Send addresses to fixtures</strong>, then Scan again.</td></tr>
+<tr><td>A light runs a demo, or sticks on its saved look</td><td>Scan, fix any mismatch it reports, then save the look into the lights again (Save tab).</td></tr>
+<tr><td>Scan finds fewer lights than expected</td><td>Check the connectors on that cable run. Only the last light on each run should have its terminator on (⋯ on a light).</td></tr>
 <tr><td>Find shows nothing</td><td>Same network? Box finished starting up? Try again after 30 s.</td></tr>
 <tr><td>Two lights do the same thing</td><td>They share an address. Patch &gt; Auto-address &gt; Send addresses to fixtures.</td></tr>
 <tr><td>A look does nothing</td><td>The look was saved for lights no longer in the patch. Set it again and Save look.</td></tr>

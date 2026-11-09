@@ -412,6 +412,13 @@ final class API {
         case ("POST", ["scan"]):
             let b = try body()
             return .json(try scan(fid, try req(b, "box_id").pyStr))
+        case ("POST", ["scan_all"]):
+            let b = try body()
+            return .json(try scanAll(fid, boxIds: b["box_ids"].truthy ? b["box_ids"].arrayValue.map { $0.pyStr } : nil))
+        case ("POST", ["check_box"]):
+            return .json(try checkBox(fl, try req(try body(), "box_id").pyStr))
+        case ("POST", ["fix_box"]):
+            return .json(try fixBox(fid, try req(try body(), "box_id").pyStr))
         case ("POST", ["box"]):
             return try boxAction(fl, try body())
         case ("POST", ["rdm"]):
@@ -513,24 +520,196 @@ final class API {
                 "terminator": d["dmx_t"]]
     }
 
+    // ------------------------------------------------------------ box check
+    private static func issue(_ key: String, _ level: String, _ text: String, fix: String? = nil, _ extra: [String: JSON] = [:]) -> JSON {
+        var o: [String: JSON] = ["key": .string(key), "level": .string(level), "text": .string(text), "fix": JSON(fix)]
+        for (k, v) in extra { o[k] = v }
+        return .object(o)
+    }
+
+    /// Read what the box is actually set to and compare it with what the app needs.
+    /// Each issue: {key, level: error|warn|info, text, fix: "box" | "app" | null}.
+    /// (The iPad app has no built-in simulator, so the web checks always run.)
+    func checkBox(_ fl: JSON, _ boxId: String) throws -> JSON {
+        guard let box = fl["boxes"].arrayValue.first(where: { $0["id"].pyStr == boxId }) else { throw AppError.key("box not found") }
+        let t = try boxTarget(fl, boxId)
+        let ip = t.ip
+        let name = box["name"].truthy ? box["name"].pyStr : "The box"
+        var issues: [JSON] = []
+        func add(_ key: String, _ level: String, _ text: String, fix: String? = nil, _ extra: [String: JSON] = [:]) {
+            issues.append(API.issue(key, level, text, fix: fix, extra))
+        }
+        let art = ctl.alive(ip, t.port, wait: 1.0)
+        var web = false
+        var st: JSON = [:]
+        if let s = try? Reap(ip, timeout: 3.0).status() { st = s; web = true }
+        var res: JSON = ["box_id": .string(boxId), "ip": .string(ip), "artnet": .bool(art), "web": .bool(web)]
+        if !art && !web {
+            add("unreachable", "error", "\(name) isn't answering at \(ip). Check its power and network cable, and that "
+                + "this iPad or computer is on the same network as the box.")
+            res["issues"] = .array(issues)
+            res["ok"] = false
+            return res
+        }
+        var macs = ctl.macsFor(ip)
+        if let m = st["mac"].string, !m.isEmpty, !macs.contains(m.lowercased()) {
+            macs = Array(Set(macs).union([m.lowercased()])).sorted()
+        }
+        if macs.count > 1 {
+            add("ip_clash", "error", "\(macs.count) boxes are answering at \(ip). Each box needs its own IP: change one on its "
+                + "front panel (Personality > Ethernet settings).")
+        }
+        let twins = fl["boxes"].arrayValue.filter { $0["id"].pyStr != boxId && $0["ip"].string == ip }
+            .map { $0["name"].truthy ? $0["name"].pyStr : "Box" }
+        if !twins.isEmpty {
+            add("ip_twin", "error", "\(name) and \(twins.joined(separator: ", ")) on this float are both set to \(ip). Set each box's own IP on the Patch tab.")
+        }
+        if web {
+            let reap = Reap(ip, timeout: 3.0)
+            if let d = try? reap.dmxSettings() {
+                if let i = Reap.optionIndex(d["dmxi"], Reap.dmxInputs), i != 3 {
+                    add("dmx_input", "error", "DMX input is set to \(Reap.dmxInputs[i]). It must be Ethernet, or the lights ignore the app.", fix: "box")
+                }
+            } else {
+                add("unread_dmx", "info", "Couldn't read the box's DMX input setting.")
+            }
+            if let e = try? reap.ethSettings() {
+                if let i = Reap.optionIndex(e["ethm"], Reap.ethModes), i != 0 {
+                    add("eth_mode", "error", "Ethernet mode is \(Reap.ethModes[i]). It must be Art-NET.", fix: "box")
+                }
+            } else {
+                add("unread_eth", "info", "Couldn't read the box's Ethernet mode.")
+            }
+            if let o = try? reap.otherSettings() {
+                if o["ebm"].truthy && o["ebm"].string != "pass-through" {
+                    add("pass_through", "error", "E-box mode is \(o["ebm"].pyStr). It must be Pass-Thr so each light has its own address.", fix: "box")
+                }
+                if o["ic_od"].string == "disabled" {
+                    add("playing", "info", "The box is playing its saved look. Save tab > Back to app control to use the app.")
+                }
+            } else {
+                add("unread_other", "info", "Couldn't read the box's E-box mode.")
+            }
+        } else {
+            add("no_web", "error", "\(name) answers Art-Net but its web page doesn't, so the app can't scan or check "
+                + "its lights. Wait 30 s after power-up and try again.")
+        }
+        if art {
+            let pas = ctl.outputPortAddresses(ip)
+            if !pas.isEmpty && !pas.contains(t.pa) {
+                let fmt = { (x: Int) in "\(x >> 8):\((x >> 4) & 15):\(x & 15)" }
+                add("universe", "error", "The box listens on Art-Net \(fmt(pas[0])) but the app sends \(fmt(t.pa)).",
+                    fix: "app", ["box_pa": .int(pas[0])])
+            }
+        } else if web && !issues.contains(where: { $0["key"].string == "eth_mode" }) {
+            add("no_artnet", "error", "The box's web page answers but it doesn't answer Art-Net, so it won't follow the app.")
+        }
+        res["issues"] = .array(issues)
+        res["ok"] = .bool(!issues.contains { $0["level"].string == "error" })
+        return res
+    }
+
+    /// Put right everything checkBox can fix, then check again.
+    func fixBox(_ fid: String, _ boxId: String) throws -> JSON {
+        guard let fl = store.getFloat(fid) else { throw AppError.key("float not found") }
+        let chk = try checkBox(fl, boxId)
+        let issues = chk["issues"].arrayValue
+        let keys = Set(issues.filter { $0["fix"].truthy }.map { $0["key"].pyStr })
+        if keys.isEmpty { return ["fixed": [], "restarting": false, "check": chk] }
+        let ip = try boxTarget(fl, boxId).ip
+        var fixed: [String] = []
+        if let uni = issues.first(where: { $0["key"].string == "universe" }), let v = uni["box_pa"].int {
+            store.withLock {
+                store.updateFloat(fid) { f in
+                    var boxes = f["boxes"].arrayValue
+                    for i in boxes.indices where boxes[i]["id"].pyStr == boxId {
+                        boxes[i]["net"] = .int(v >> 8); boxes[i]["subnet"] = .int((v >> 4) & 15); boxes[i]["universe"] = .int(v & 15)
+                    }
+                    f["boxes"] = .array(boxes)
+                    f["rev"] = .int((f["rev"].int ?? 0) + 1)
+                }
+                store.bump(fid)
+            }
+            engine.refresh()
+            fixed.append("universe")
+        }
+        let boxKeys = keys.intersection(["pass_through", "dmx_input", "eth_mode"])
+        if !boxKeys.isEmpty {
+            let reap = Reap(ip)
+            if boxKeys.contains("pass_through") { try reap.setOther(passThrough: true) }
+            if boxKeys.contains("dmx_input") { try reap.setDmxInput(3) }
+            if boxKeys.contains("eth_mode") { try reap.setEthMode(0) }  // last: it's the one that touches the network settings
+            reap.restart()
+            devLock.lock(); boxPlaying.removeValue(forKey: ip); devLock.unlock()
+            fixed += boxKeys.sorted()
+        }
+        return ["fixed": .array(fixed.map { .string($0) }), "restarting": .bool(!boxKeys.isEmpty)]
+    }
+
     // ------------------------------------------------------------ scan
+    static let blocksScan: Set<String> = ["unreachable", "ip_clash", "ip_twin", "no_web", "pass_through"]
+
+    /// Scan every box on the float together: one pause of the output, each box searched at the same time.
+    func scanAll(_ fid: String, boxIds: [String]? = nil) throws -> JSON {
+        guard let fl = store.getFloat(fid) else { throw AppError.key("float not found") }
+        let ids = fl["boxes"].arrayValue.filter { $0["ip"].truthy && (boxIds == nil || boxIds!.contains($0["id"].pyStr)) }
+            .map { $0["id"].pyStr }
+        if ids.isEmpty { throw AppError.value("Set the box's IP address first.") }
+        var results: [String: JSON] = [:]
+        let resLock = NSLock()
+        try rdmSession {
+            let group = DispatchGroup()
+            for bid in ids {
+                group.enter()
+                let th = Thread { [self] in
+                    let r: JSON
+                    do { r = try self.scanBox(fid, bid) }
+                    catch { r = ["box_id": .string(bid), "error": .string("\(error)"), "devices": []] }  // one box failing never hides the others' results
+                    resLock.lock(); results[bid] = r; resLock.unlock()
+                    group.leave()
+                }
+                th.name = "scan-\(bid)"
+                th.start()
+            }
+            group.wait()
+        }
+        return ["results": .object(results)]
+    }
+
     func scan(_ fid: String, _ boxId: String) throws -> JSON {
+        let r = try rdmSession { try scanBox(fid, boxId) }
+        if r["error"].truthy { throw AppError.runtime(r["error"].pyStr) }
+        return r
+    }
+
+    /// One box's scan. The caller holds the RDM session (output paused).
+    func scanBox(_ fid: String, _ boxId: String) throws -> JSON {
         guard let fl = store.getFloat(fid) else { throw AppError.key("float not found") }
         let t = try boxTarget(fl, boxId)
+        let chk = try checkBox(fl, boxId)
+        if let block = chk["issues"].arrayValue.first(where: { API.blocksScan.contains($0["key"].pyStr) }) {
+            return ["box_id": .string(boxId), "ip": .string(t.ip), "error": block["text"], "devices": [], "check": chk]
+        }
+        // The iPad has no Art-Net RDM path: the real box doesn't bridge it. A box without a
+        // working web page is refused above (no_web / unreachable).
         let reap = Reap(t.ip)
-        guard reap.available() else { throw reachError(t.ip) }
         let expected = fl["fixtures"].arrayValue.filter { $0["box_id"].pyStr == boxId }.count
         var found: [String: JSON] = [:]
         var order: [String] = []
-        try rdmSession {
-            for _ in 0..<2 {  // the box's search sometimes misses a light; one retry fills the gaps
-                for d in try reap.discover() {
-                    let k = d["d_uid"].pyStr
-                    if found[k] == nil { order.append(k) }
-                    found[k] = d
-                }
-                if found.count >= expected { break }
+        var counts: [Int] = []
+        var repeats = 0
+        for _ in 0..<3 {  // the box's search sometimes misses a light; repeat searches fill the gaps
+            let got = try reap.discover()
+            var gotKeys = Set<String>()
+            for d in got {
+                let k = d["d_uid"].pyStr
+                gotKeys.insert(k)
+                if found[k] == nil { order.append(k) }
+                found[k] = d
             }
+            counts.append(gotKeys.count)
+            repeats += reap.lastRepeats
+            if found.count >= expected && gotKeys.count == found.count { break }  // every expected light, all in one clean search
         }
         let devs = order.map { found[$0]! }
         devLock.lock()
@@ -557,8 +736,12 @@ final class API {
         let sorted = devs.enumerated().sorted {
             (($0.element["dmx_a"].int ?? 0), $0.offset) < (($1.element["dmx_a"].int ?? 0), $1.offset)
         }.map { API.reapScanEntry($0.element) }
+        engine.setGuard(boxId, sorted)
         return ["box_id": .string(boxId), "ip": .string(t.ip), "port_address": .int(t.pa), "devices": .array(sorted),
-                "via": "box web page", "time": .double(Date().timeIntervalSince1970)]
+                "via": "box web page", "time": .double(Date().timeIntervalSince1970), "check": chk,
+                "expected": .int(expected), "searches": .array(counts.map { .int($0) }),
+                "unstable": .bool(Set(counts).count > 1 || repeats > 0), "repeats": .int(repeats),
+                "terminators_on": .int(devs.filter { $0["dmx_t"].string == "on" }.count)]
     }
 
     // ------------------------------------------------------------ one light through the box's page
@@ -906,6 +1089,9 @@ final class API {
         if errors.isEmpty {
             eng.withLock { eng.applying = nil }
             eng.setHold(false)
+        }
+        if !done.isEmpty && errors.isEmpty {
+            eng.clearGuard(fl["boxes"].arrayValue.map { $0["id"].pyStr })  // the lights now sit where the patch says
         }
         return ["ok": .bool(errors.isEmpty), "done": .array(done), "errors": .array(errors), "held": .bool(!errors.isEmpty)]
     }

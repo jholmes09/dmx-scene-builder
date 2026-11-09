@@ -58,6 +58,7 @@ class Engine:
         self.lock = threading.RLock()
         self.flash: Dict[str, float] = {}         # fixture id -> until (monotonic)
         self.special: Dict[str, int] = {}         # fixture id -> Special functions byte override
+        self.guards: Dict[str, set] = {}          # box id -> real Mode 7 lights' Special byte positions (from Scan)
         self.dark: set = set()                    # fixture ids forced to dim 0 (verify step)
         self.sweep: Optional[dict] = None         # address-finder overlay
         self.white_test: Optional[dict] = None    # {"method": 1-5, "k": kelvin}: compare ways of making white
@@ -165,6 +166,25 @@ class Engine:
             except Exception:
                 logging.getLogger("scenebuilder.engine").exception("box watch")
 
+    def set_guard(self, box_id: str, devices: list):
+        """Remember the Special-channel position of every real Mode 7 light a Scan found on this box."""
+        chans = set()
+        for d in devices:
+            a = d.get("address")
+            if d.get("ok") and a and d.get("mode") == fixtures.SAVE_MODE and 1 <= a <= 512:
+                chans.add(a - 1)  # Special is the first channel of Mode 7
+        with self.lock:
+            if chans:
+                self.guards[box_id] = chans
+            else:
+                self.guards.pop(box_id, None)
+        self.refresh()
+
+    def clear_guard(self, box_ids):
+        with self.lock:
+            for b in box_ids:
+                self.guards.pop(b, None)
+
     def box_states(self) -> list:
         """[{name, ip, state: ok | checking | down}] for the boxes on the active float."""
         with self.store.lock:
@@ -264,8 +284,21 @@ class Engine:
             # A neighbour's overlapping bytes must never land on a Mode 7 Special channel
             # (1-2 = save, 5-6 = factory demo at power-on).
             dark_all = self.blackout or bool(sw)
+            ours = set()
             for buf, i, v in specials:
                 buf[i] = 0 if dark_all else v
+                ours.add((id(buf), i))
+            # Real lights the last Scan found in Mode 7 at addresses the patch doesn't use: their
+            # Special byte is held at 0 too, so another light's colour can't make them save a look,
+            # show the saved look, or switch to the factory demo.
+            for bid, chans in self.guards.items():
+                b = boxes.get(bid)
+                if not b:
+                    continue
+                buf = out[(b["ip"], int(b.get("udp_port") or 6454), (b["net"] << 8) | (b["subnet"] << 4) | b["universe"])]
+                for i in chans:
+                    if (id(buf), i) not in ours:
+                        buf[i] = 0
             return {k: bytes(v) for k, v in out.items()}
 
     def refresh(self):

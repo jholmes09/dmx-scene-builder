@@ -90,10 +90,13 @@ class Reap:
     def discover(self, timeout: float = 25.0) -> List[dict]:
         self._post("rdm_test")
         found: Dict[str, dict] = {}
+        self.last_repeats = 0  # same light reported twice in one search: a sign of a noisy cable run
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             r = self._post("ds_get_device")
             if r.get("d_uid"):
+                if r["d_uid"] in found:
+                    self.last_repeats += 1
                 found[r["d_uid"]] = r
             if r.get("disc_done") == 1:
                 return list(found.values())
@@ -155,6 +158,62 @@ class Reap:
         r = self._post("oth_s", data)
         if r.get("status") != 0:
             raise ReapError("The box didn't confirm the setting (status %s)." % r.get("status"))
+
+    # Option lists exactly as the box's own settings page offers them (index = value written).
+    DMX_INPUTS = ["wired DMX", "wireless DMX", "wireless out DMX", "ethernet"]
+    ETH_MODES = ["Art-NET", "sACN", "gMA I", "gMA II"]
+
+    @staticmethod
+    def option_index(value, options) -> Optional[int]:
+        """The box may report a setting as its index or its label; return the index, or None."""
+        if value is None or value == "":
+            return None
+        try:
+            i = int(value)
+            return i if 0 <= i < len(options) else None
+        except (TypeError, ValueError):
+            pass
+        low = str(value).strip().lower()
+        for i, o in enumerate(options):
+            if o.lower() == low:
+                return i
+        return None
+
+    def dmx_settings(self) -> dict:
+        """{'dmxa': box DMX address, 'dmxi': DMX input, 'rdmn': box label}"""
+        return self._post("set_dmx")
+
+    def eth_settings(self) -> dict:
+        """{'ip', 'netm', 'ethm': Ethernet mode, 'igmpt'}"""
+        return self._post("eth_s")
+
+    def set_dmx_input(self, index: int) -> None:
+        cur = self.dmx_settings()
+        try:
+            dmxa = int(cur.get("dmxa"))
+        except (TypeError, ValueError):
+            raise ReapError("Couldn't read the box's DMX settings, so nothing was changed.")
+        r = self._post("set_dmx", {"dmxa": dmxa, "dmxi": int(index), "rdmn": (cur.get("rdmn") or "")[:32]})
+        if r.get("status") != 0:
+            raise ReapError("The box didn't confirm the DMX input change (status %s)." % r.get("status"))
+
+    def set_eth_mode(self, index: int) -> None:
+        """Change only the Ethernet mode. The box's IP and mask are sent back exactly as read, and
+        nothing is written unless the box reports the IP we are talking to."""
+        import ipaddress
+        cur = self.eth_settings()
+        ip, netm = str(cur.get("ip") or ""), str(cur.get("netm") or "")
+        try:
+            ipaddress.IPv4Address(ip)
+            ipaddress.IPv4Address(netm)
+        except ValueError:
+            raise ReapError("Couldn't read the box's network settings, so nothing was changed.")
+        if ip != self.ip:
+            raise ReapError("The box reports IP %s, not %s, so nothing was changed." % (ip, self.ip))
+        igmpt = self.option_index(cur.get("igmpt"), ["off"] + ["%d s" % n for n in range(1, 11)])
+        r = self._post("eth_s", {"ip": ip, "netm": netm, "ethm": int(index), "igmpt": igmpt or 0})
+        if r.get("status") != 0:
+            raise ReapError("The box didn't confirm the Ethernet mode change (status %s)." % r.get("status"))
 
     def restart(self) -> None:
         try:

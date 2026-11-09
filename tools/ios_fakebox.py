@@ -10,8 +10,10 @@ make it fail, and read back what the lights received:
   GET  /info                 {"artnet_port", "web_port"}
   POST /reset {"modules": [[hex serial, variant, mode, address], ...]}
   POST /set   {"offline": "refuse"|"blackhole"|null, "ic_od": ..., "fail_uid": ..., "confirm_delay": s,
-               "restart_s": s, "drop_next": [d_uid, ...]}
-  GET  /state                modules, frame count, last frame, Special-byte transitions, REAP log
+               "restart_s": s, "drop_next": [d_uid, ...],
+               "ebm": "pass-through"|"standard", "dmxi": "ethernet"|"wired DMX"|..., "ethm": "Art-NET"|"sACN"|...}
+  GET  /state                modules, frame count, last frame, Special-byte transitions, REAP log,
+                             box settings (ebm, dmxi, ethm) and every settings write ([path, form], ...)
 
 Prints one JSON line with the control port, then serves until killed.
 """
@@ -78,6 +80,8 @@ def reset(mods):
         sim.last_dmx = bytes(512)
     box.go_online()
     box.ic_od = "enabled"
+    box.ebm, box.dmxi, box.ethm = "pass-through", "ethernet", "Art-NET"
+    box.writes = []
     box.fail_uid = None
     box.confirm_delay = box.delay = box.discover_delay = 0.0
     box.restart_s = 1.5
@@ -114,6 +118,8 @@ class Control(BaseHTTPRequestHandler):
                 return self._send({"modules": mods, "frames": frames, "last_frame_time": last_t, "now": time.time(),
                                    "last_dmx": list(sim.last_dmx), "special_log": list(sim.special_log),
                                    "ic_od": box.ic_od, "offline": box.offline,
+                                   "ebm": box.ebm, "dmxi": box.dmxi, "ethm": box.ethm,
+                                   "writes": [[p, q] for p, q in box.writes],
                                    "reap_log": [[t, p] for t, p, _ in box.log]})
         self.send_error(404)
 

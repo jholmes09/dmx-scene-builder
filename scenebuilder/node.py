@@ -165,6 +165,7 @@ class ArtNetController:
         self._seq: Dict[Target, int] = {}
         self.output_enabled = False
         self.nodes: Dict[str, dict] = {}
+        self.ip_macs: dict = {}  # ip -> {mac: last seen}: two MACs on one IP means two boxes clash
         self._tod: Dict[Tuple[str, int], Dict[int, List[bytes]]] = {}
         self._tod_total: Dict[Tuple[str, int], int] = {}
         self._rdm_waiters: List[dict] = []
@@ -294,6 +295,12 @@ class ArtNetController:
             except Exception:  # never let a bad packet kill the receiver
                 log.exception("bad packet from %s", addr)
 
+    def macs_for(self, ip: str, within: float = 60.0) -> list:
+        """Hardware addresses that answered from this IP lately (more than one = an IP clash)."""
+        now = time.time()
+        with self._lock:
+            return sorted(m for m, t in self.ip_macs.get(ip, {}).items() if now - t < within)
+
     def _handle(self, data: bytes, addr):
         op = artnet.opcode(data)
         if op == artnet.OP_POLL_REPLY:
@@ -306,6 +313,8 @@ class ArtNetController:
                 key = "%s:%d/%d" % (addr[0], addr[1], pr.bind_index)
                 with self._lock:
                     self.nodes[key] = d
+                    if pr.mac and pr.mac != "00:00:00:00:00:00":
+                        self.ip_macs.setdefault(addr[0], {})[pr.mac] = d["seen"]
         elif op == artnet.OP_TOD_DATA:
             td = artnet.parse_tod_data(data)
             if td:

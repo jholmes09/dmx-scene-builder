@@ -29,6 +29,8 @@ final class ArtNetController {
     private var seq: [Target: Int] = [:]
     private var _outputEnabled = false
     var nodes: [String: JSON] = [:]
+    /// ip -> {mac: last seen}: two MACs on one IP means two boxes clash.
+    private var ipMacs: [String: [String: Double]] = [:]
     private var stopped = false
     private(set) var packetsSent = 0
     private(set) var packetsReceived = 0
@@ -211,7 +213,27 @@ final class ArtNetController {
         d["from"] = .string("\(ip):\(port)")
         d["udp_port"] = .int(port)
         d["seen"] = .double(Date().timeIntervalSince1970)
-        lock.lock(); nodes["\(ip):\(port)/\(pr.bindIndex)"] = d; lock.unlock()
+        lock.lock()
+        nodes["\(ip):\(port)/\(pr.bindIndex)"] = d
+        if !pr.mac.isEmpty && pr.mac != "00:00:00:00:00:00" { ipMacs[ip, default: [:]][pr.mac] = d["seen"].number ?? 0 }
+        lock.unlock()
+    }
+
+    /// Hardware addresses that answered from this IP lately (more than one = an IP clash).
+    func macsFor(_ ip: String, within: Double = 60.0) -> [String] {
+        let now = Date().timeIntervalSince1970
+        lock.lock(); defer { lock.unlock() }
+        return (ipMacs[ip] ?? [:]).filter { now - $0.value < within }.keys.sorted()
+    }
+
+    /// Port-Addresses every node answering from this IP says it outputs.
+    func outputPortAddresses(_ ip: String) -> [Int] {
+        lock.lock(); defer { lock.unlock() }
+        var s = Set<Int>()
+        for n in nodes.values where n["ip"].string == ip {
+            for x in n["output_port_addresses"].arrayValue { if let v = x.int { s.insert(v) } }
+        }
+        return s.sorted()
     }
 
     // ------------------------------------------------------------ discovery

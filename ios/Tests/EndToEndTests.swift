@@ -148,7 +148,7 @@ final class EndToEndTests: XCTestCase {
 
     func testScanRefusedWhenBoxUnreachable() {
         _ = http("POST", "/set", ["offline": "refuse"])
-        refused("POST", "/api/floats/\(fid)/scan", ["box_id": .string(bid)], "Can't reach the box's web page")
+        refused("POST", "/api/floats/\(fid)/scan", ["box_id": .string(bid)], "isn't answering at 127.0.0.1")
         _ = http("POST", "/set", ["offline": .null])
     }
 
@@ -369,6 +369,92 @@ final class EndToEndTests: XCTestCase {
         XCTAssertTrue(waitFor { !self.box()["offline"].truthy }, "box back after restart")
         _ = ok("POST", "/api/output", ["action": "activate", "float_id": .string(fid)])
         XCTAssertTrue(status()["output"].truthy, "back under app control")
+    }
+
+    // ------------------------------------------------------------ box settings check (Python BoxCheckTests)
+    func check() -> JSON { ok("POST", "/api/floats/\(fid)/check_box", ["box_id": .string(bid)]) }
+
+    func testWrongBoxSettingsAreNamedAndFixed() {
+        _ = http("POST", "/set", ["dmxi": "wired DMX", "ethm": "sACN", "ebm": "standard"])
+        var c = check()
+        XCTAssertEqual(c["ok"], false)
+        var keys: [String: JSON] = [:]
+        for x in c["issues"].arrayValue { keys[x["key"].pyStr] = x }
+        for k in ["dmx_input", "eth_mode", "pass_through"] { XCTAssertEqual(keys[k]?["fix"], "box", c.serialize()) }
+        XCTAssertTrue(keys["dmx_input"]?["text"].pyStr.contains("wired DMX") ?? false)
+        // Pass-Thr off blocks the scan with the reason, not a silent empty list.
+        refused("POST", "/api/floats/\(fid)/scan", ["box_id": .string(bid)], "Pass-Thr")
+        _ = http("POST", "/set", ["restart_s": 0.5])
+        let r = ok("POST", "/api/floats/\(fid)/fix_box", ["box_id": .string(bid)])
+        XCTAssertEqual(r["restarting"], true)
+        XCTAssertEqual(r["fixed"].arrayValue.map { $0.pyStr }.sorted(), ["dmx_input", "eth_mode", "pass_through"])
+        let eth = box()["writes"].arrayValue.first { $0[0].string == "eth_s" }
+        XCTAssertEqual(eth?[1]["ip"], "127.0.0.1", "network settings sent back unchanged")
+        XCTAssertEqual(eth?[1]["netm"], "255.0.0.0", "network settings sent back unchanged")
+        XCTAssertTrue(waitFor { !self.box()["offline"].truthy }, "box back after restart")
+        c = check()
+        XCTAssertEqual(c["ok"], true, c.serialize())
+        let st = box()
+        XCTAssertEqual([st["dmxi"], st["ethm"], st["ebm"]], ["ethernet", "Art-NET", "pass-through"])
+        _ = ok("POST", "/api/floats/\(fid)/scan", ["box_id": .string(bid)])
+    }
+
+    func testUniverseMismatchIsFixedInTheApp() {
+        var fl = ok("GET", "/api/floats/\(fid)")
+        fl["boxes"][0]["universe"] = 3
+        _ = ok("PUT", "/api/floats/\(fid)", fl)
+        let c = check()
+        let uni = c["issues"].arrayValue.filter { $0["key"].string == "universe" }
+        XCTAssertFalse(uni.isEmpty, c.serialize())
+        XCTAssertEqual(uni.first?["fix"], "app")
+        XCTAssertTrue(uni.first?["text"].pyStr.contains("0:0:0") ?? false)
+        let r = ok("POST", "/api/floats/\(fid)/fix_box", ["box_id": .string(bid)])
+        XCTAssertEqual(r["fixed"], ["universe"])
+        XCTAssertEqual(r["restarting"], false)
+        XCTAssertEqual(store.getFloat(fid)!["boxes"][0]["universe"], 0)
+        XCTAssertEqual(box()["writes"], [], "nothing written to the box")
+    }
+
+    func testTwoBoxesOnOneIPRefuseToScan() {
+        var fl = ok("GET", "/api/floats/\(fid)")
+        var twin = fl["boxes"][0]
+        twin["id"] = "box_twin"; twin["name"] = "E-Box B"
+        fl["boxes"] = .array(fl["boxes"].arrayValue + [twin])
+        _ = ok("PUT", "/api/floats/\(fid)", fl)
+        let r = ok("POST", "/api/floats/\(fid)/scan_all", [:])
+        for b in [bid, "box_twin"] {
+            XCTAssertTrue(r["results"][b]["error"].pyStr.contains("both set to 127.0.0.1"), r.serialize())
+        }
+    }
+
+    func testScanAllKeepsEachBoxsResult() {
+        var fl = ok("GET", "/api/floats/\(fid)")
+        var other = fl["boxes"][0]
+        other["id"] = "box_b"; other["name"] = "E-Box B"; other["ip"] = "127.0.0.9"
+        fl["boxes"] = .array(fl["boxes"].arrayValue + [other])
+        _ = ok("PUT", "/api/floats/\(fid)", fl)
+        let r = ok("POST", "/api/floats/\(fid)/scan_all", [:])
+        XCTAssertEqual(r["results"][bid]["devices"].arrayValue.map { $0["uid"].string! }, uids, r.serialize())
+        XCTAssertTrue(r["results"]["box_b"]["error"].pyStr.contains("isn't answering at 127.0.0.9"), r.serialize())
+        XCTAssertEqual(r["results"][bid]["expected"], 4)
+        XCTAssertEqual(r["results"][bid]["unstable"], false)
+    }
+
+    func testMisaddressedMode7LightNeverGetsSaveOrDemoValues() {
+        // The real light 012e2a04 sits in Mode 7 at ch 32, inside L3's block (31-33). The patch
+        // doesn't know, so L3's dimmer byte (5 = "factory demo") lands on its control channel.
+        let mods: JSON = [["012e2a01", "RGBW", 1, 1], ["012e2a02", "RGBW", 1, 16], ["012e2a03", "TW", 11, 31], ["012e2a04", "TW", 7, 32]]
+        _ = http("POST", "/reset", ["modules": mods])
+        let look: JSON = ["dim": 0.02, "cct": 3000]
+        XCTAssertEqual(render("TW", 11, look)[1], 5, "without the guard ch 32 would get 5")
+        _ = ok("POST", "/api/floats/\(fid)/live", ["changes": ["fx3": look]])
+        let r = ok("POST", "/api/floats/\(fid)/scan", ["box_id": .string(bid)])
+        XCTAssertTrue(r["devices"].arrayValue.contains { $0["address"] == 32 && $0["mode"] == 7 }, r.serialize())
+        _ = ok("POST", "/api/output", ["action": "activate", "float_id": .string(fid)])
+        XCTAssertTrue(waitFor { self.box()["frames"].int! > 5 })
+        let frame = box()["last_dmx"].arrayValue
+        XCTAssertEqual(frame[31], 0, "control channel of the misaddressed light held at 0")
+        XCTAssertEqual(frame[30], .int(render("TW", 11, look)[0]), "the rest of L3 still goes out")
     }
 
     // ------------------------------------------------------------ iOS lifecycle

@@ -176,6 +176,7 @@ const S = {
   rev: 0,            // project structure revision (patch/looks/palette); other devices' edits bump it
   pointerDown: false,
   scan: {},          // box_id -> scan result
+  check: {},         // box_id -> box settings check {ok, issues}
   links: {},         // scanned uid -> fixture id ("" = none, "__new" = add)
   discover: null,    // nodes list
   saving: false, saveTimer: null,
@@ -791,9 +792,10 @@ function floatSettings(fl) {
 function renderPatch(body, fl) {
   const boxes = h("div", { class: "card" });
   boxes.append(h("div", { class: "card-head" }, h("h3", { class: "grow" }, fl.boxes.length > 1 ? "Boxes" : "Box"),
-    h("button", { class: "btn small", onclick: () => discover(fl) }, "Find")));
+    h("button", { class: "btn small", onclick: () => discover(fl) }, "Find"),
+    fl.boxes.filter(b => b.ip).length > 1 ? h("button", { class: "btn small gold", disabled: !!S._scanning || null, onclick: () => scanBoxes(fl, fl.boxes) }, S._scanning ? "Scanning…" : "Scan all boxes") : null));
   if (S.discover) boxes.append(discoverResults(fl));
-  for (const b of fl.boxes) boxes.append(boxRow(fl, b));
+  for (const b of fl.boxes) boxes.append(boxRow(fl, b), checkPanel(fl, b) || "", scanReport(fl, b) || "");
   body.append(boxes);
 
   const fxCard = h("div", { class: "card" });
@@ -801,6 +803,8 @@ function renderPatch(body, fl) {
     h("button", { class: "btn small", onclick: () => autoPatch(fl) }, "Auto-address"),
     h("button", { class: "btn small ghost icon", title: "Add fixture", onclick: () => { fl.fixtures.push({ id: "fx_" + uid8(), label: "New " + (fl.fixtures.length + 1), type_id: "", variant: "TW", mode: 11, box_id: fl.boxes[0] && fl.boxes[0].id, address: null, uid: null, notes: "" }); saveFloat(fl, true).then(() => renderMain()); } }, "+")));
   fxCard.append(problemsBox(fl));
+  const realBanner = realLightBanner(fl);
+  if (realBanner) fxCard.append(realBanner);
   fxCard.append(bulkBar(fl));
   fxCard.append(h("div", { class: "tbl-wrap" }, fixtureTable(fl)));
   fxCard.append(foundExtras(fl));
@@ -819,14 +823,15 @@ function renderPatch(body, fl) {
 function boxRow(fl, b) {
   const num = (k, lo, hi) => h("input", { class: "f num", type: "number", inputmode: "numeric", min: lo, max: hi, value: b[k], style: { width: "58px" },
     onchange: e => { b[k] = clamp(parseInt(e.target.value || "0", 10), lo, hi); e.target.value = b[k]; saveFloat(fl); } });
-  const scanning = S._scanning === b.id;
+  const scanning = !!(S._scanning && S._scanning.has(b.id));
   return h("div", { style: { borderTop: "1px solid var(--line)", paddingTop: "12px", marginTop: "12px" } },
     h("div", { class: "form-row" },
       fl.boxes.length > 1 ? h("div", { class: "field", style: { width: "110px" } }, h("label", null, "Name"), h("input", { class: "f", value: b.name, onchange: e => { b.name = e.target.value; saveFloat(fl); } })) : null,
-      h("div", { class: "field" }, h("label", null, "IP"), h("input", { class: "f ip", value: b.ip, placeholder: "2.x.x.x", inputmode: "decimal", onchange: e => { b.ip = e.target.value.trim(); saveFloat(fl); renderFloatHead(); } })),
+      h("div", { class: "field" }, h("label", null, "IP"), h("input", { class: "f ip", value: b.ip, placeholder: "2.x.x.x", inputmode: "decimal", onchange: e => { b.ip = e.target.value.trim(); delete S.check[b.id]; delete S.scan[b.id]; saveFloat(fl); renderFloatHead(); renderMain(); } })),
       h("div", { class: "field" }, h("label", null, "Net · Sub · Uni"), h("div", { class: "btn-row", style: { flexWrap: "nowrap", gap: "4px" } }, num("net", 0, 127), num("subnet", 0, 15), num("universe", 0, 15))),
       h("div", { class: "btn-row", style: { marginLeft: "auto" } },
-        h("button", { class: "btn small gold", disabled: !b.ip || scanning, onclick: () => scanBox(fl, b) }, scanning ? "Scanning…" : "Scan"),
+        h("button", { class: "btn small", disabled: !b.ip || scanning || null, onclick: () => checkBox(fl, b) }, "Check"),
+        h("button", { class: "btn small gold", disabled: !b.ip || !!S._scanning || null, onclick: () => scanBox(fl, b) }, scanning ? "Scanning…" : "Scan"),
         b.ip ? h("a", { class: "btn small", href: "http://" + b.ip, target: "_blank", title: "Box web page (robe / 2479)" }, "REAP") : null,
         S.sim && b.ip !== "127.0.0.1" ? h("button", { class: "btn small ghost", onclick: () => { b.ip = "127.0.0.1"; b.udp_port = S.sim.port; b.net = S.sim.net; b.subnet = S.sim.subnet; b.universe = S.sim.universe; saveFloat(fl, true).then(() => renderMain()); } }, "Use simulator") : null,
         fl.boxes.length > 1 ? h("button", { class: "btn small ghost icon", title: "Remove box", onclick: async () => {
@@ -1035,26 +1040,127 @@ async function reloadFloat(fid) {
   return fresh;
 }
 
-async function scanBox(fl, b) {
-  S._scanning = b.id; renderMain();
+function scanBox(fl, b) { return scanBoxes(fl, [b]); }
+
+async function scanBoxes(fl, boxes) {
+  // Every box is checked, then searched at the same time on the server.
+  boxes = boxes.filter(b => b.ip);
+  if (!boxes.length) return;
+  S._scanning = new Set(boxes.map(b => b.id)); renderMain();
+  const msgs = []; let bad = false;
   try {
-    const r = await api("POST", `/api/floats/${fl.id}/scan`, { box_id: b.id });
-    S.scan[b.id] = r;
-    const n = r.devices.length;
-    // Link every found light that matches exactly one unlinked patch fixture on this box by address.
-    const linkedUids = new Set(fl.fixtures.map(f => f.uid).filter(Boolean));
-    const auto = r.devices.filter(d => d.ok && !linkedUids.has(d.uid)).filter(d => {
-      const same = fl.fixtures.filter(f => f.box_id === b.id && !f.uid && f.address === d.address);
-      const rivals = r.devices.filter(x => x.ok && x.address === d.address);
-      if (same.length === 1 && rivals.length === 1) { S.links[d.uid] = same[0].id; return true; }
-      return false;
-    });
-    if (auto.length) await applyScan(fl, b, { devices: auto });
-    toast(n ? `Found ${n} fixture(s) on ${b.name}` : `${b.name} answered but reported no fixtures`, n ? "ok" : "bad");
+    const r = await api("POST", `/api/floats/${fl.id}/scan_all`, { box_ids: boxes.map(b => b.id) });
+    for (const b of boxes) {
+      const res = r.results[b.id] || { error: "No answer from the scan.", devices: [] };
+      if (res.check) S.check[b.id] = res.check;
+      const who = boxes.length > 1 ? b.name + ": " : "";
+      if (res.error) { S.scan[b.id] = { error: res.error, devices: [] }; msgs.push(who + res.error); bad = true; continue; }
+      S.scan[b.id] = res;
+      const n = res.devices.length;
+      // Link every found light that matches exactly one unlinked patch fixture on this box by address.
+      const linkedUids = new Set(fl.fixtures.map(f => f.uid).filter(Boolean));
+      const auto = res.devices.filter(d => d.ok && !linkedUids.has(d.uid)).filter(d => {
+        const same = fl.fixtures.filter(f => f.box_id === b.id && !f.uid && f.address === d.address);
+        const rivals = res.devices.filter(x => x.ok && x.address === d.address);
+        if (same.length === 1 && rivals.length === 1) { S.links[d.uid] = same[0].id; return true; }
+        return false;
+      });
+      if (auto.length) await applyScan(fl, b, { devices: auto });
+      if (!n) { msgs.push(`${who}answered but reported no lights`); bad = true; }
+      else if (res.expected && n < res.expected) { msgs.push(`${who}found ${n} of ${res.expected} lights`); bad = true; }
+      else msgs.push(`${who}found ${n} light(s)`);
+    }
   } catch (e) {
-    S.scan[b.id] = { error: e.message, devices: [] };
-    toast(e.message, "bad");
+    for (const b of boxes) S.scan[b.id] = { error: e.message, devices: [] };
+    msgs.push(e.message); bad = true;
   } finally { S._scanning = null; renderMain(); }
+  toast(msgs.join(" · "), bad ? "bad" : "ok");
+}
+
+async function checkBox(fl, b, quiet) {
+  try {
+    S.check[b.id] = await api("POST", `/api/floats/${fl.id}/check_box`, { box_id: b.id });
+    if (!quiet) toast(S.check[b.id].ok ? `${b.name} settings look right` : `${b.name} needs attention`, S.check[b.id].ok ? "ok" : "bad");
+  } catch (e) { toast(e.message, "bad"); }
+  renderMain();
+}
+
+async function fixBox(fl, b) {
+  const c = S.check[b.id];
+  const boxSide = c.issues.some(x => x.fix === "box");
+  if (boxSide && !(await confirmBox("Fix the box?", `Change ${b.name}'s settings and restart it (about 10 s)? The lights go dark while it restarts.`, "Fix it"))) return;
+  try {
+    const r = await api("POST", `/api/floats/${fl.id}/fix_box`, { box_id: b.id });
+    if (r.fixed.includes("universe")) await reloadFloat(fl.id);
+    toast(r.restarting ? `${b.name} restarting with the new settings…` : "Fixed", "ok");
+    renderMain();
+    setTimeout(() => checkBox(fl, curFloat() && curFloat().id === fl.id ? curFloat().boxes.find(x => x.id === b.id) || b : b), r.restarting ? 15000 : 300);
+  } catch (e) { toast(e.message, "bad"); }
+}
+
+function checkPanel(fl, b) {
+  const c = S.check[b.id];
+  if (!c) return null;
+  const shown = c.issues.filter(x => x.level !== "info" || x.key === "playing");
+  if (!shown.length) return h("div", { class: "hint", style: { color: "var(--ok)", marginTop: "6px" } }, "✓ Box settings are right");
+  const canFix = c.issues.some(x => x.fix);
+  return h("div", { class: "note " + (c.ok ? "warn" : "bad"), style: { marginTop: "8px" } },
+    shown.map(x => h("div", { style: { margin: "2px 0" } }, (x.level === "error" ? "✕ " : x.level === "warn" ? "! " : "· ") + x.text)),
+    canFix ? h("div", { class: "btn-row", style: { marginTop: "8px" } }, h("button", { class: "btn small gold", onclick: () => fixBox(fl, b) }, "Fix")) : null);
+}
+
+function scanReport(fl, b) {
+  // How complete and steady the last search of this box was.
+  const r = S.scan[b.id];
+  if (!r || r.error || !r.expected) return null;
+  const n = r.devices.length;
+  const found = new Set(r.devices.map(d => d.uid));
+  const missing = fl.fixtures.filter(f => f.box_id === b.id && f.uid && !found.has(f.uid));
+  if (n >= r.expected && !r.unstable && !missing.length) return null;
+  return h("div", { class: "note warn", style: { marginTop: "8px" } },
+    h("div", null, h("strong", null, `Found ${n} of ${r.expected} lights.`),
+      r.unstable ? ` Each search gave a different answer (${r.searches.join(", ")}${r.repeats ? `, ${r.repeats} repeated` : ""}).` : ""),
+    missing.length ? h("div", null, "Not found: " + missing.map(f => f.label).join(", ")) : null,
+    h("div", { style: { marginTop: "4px" } }, `Usually a cable run: check the connectors, and that only the last light on each run has its line terminator on (now on: ${r.terminators_on || 0}; ⋯ on a light to change it).`));
+}
+
+function realLightProblems(fl) {
+  // Compare the real lights (last Scan) with the patch. A light on the wrong address or mode reads
+  // another light's colour on its control channel, which can make it save a look, show its saved
+  // look, or switch to the factory demo.
+  const out = { lines: [], pushable: false };
+  const fp = (variant, mode) => ((MODES[variant] || {})[mode] || {}).footprint || 1;
+  for (const b of fl.boxes) {
+    const r = S.scan[b.id];
+    if (!r || r.error) continue;
+    const who = fl.boxes.length > 1 ? b.name + ": " : "";
+    const real = r.devices.filter(d => d.ok && d.address).map(d => {
+      const fx = fl.fixtures.find(f => f.uid === d.uid);
+      const n = d.footprint || fp(d.variant_guess || (fx && fx.variant) || "RGBW", d.mode);
+      return { d, fx, a: d.address, e: d.address + n - 1, name: fx ? fx.label : (d.label || d.uid) };
+    }).sort((x, y) => x.a - y.a);
+    for (const x of real) if (x.fx && (x.fx.address !== x.a || x.fx.mode !== x.d.mode)) {
+      out.lines.push(`${who}${x.name} is really at ${x.a} · Mode ${x.d.mode}; the app has ${x.fx.address || "–"} · Mode ${x.fx.mode}`);
+      out.pushable = true;
+    }
+    for (let i = 0; i < real.length; i++) for (let j = i + 1; j < real.length && real[j].a <= real[i].e; j++)
+      out.lines.push(`${who}${real[i].name} (ch ${real[i].a}-${real[i].e}) and ${real[j].name} (ch ${real[j].a}-${real[j].e}) overlap on the real lights`);
+    const patched = fl.fixtures.filter(f => f.box_id === b.id && f.address).map(f => [f.address, f.address + fp(f.variant, f.mode) - 1]);
+    for (const x of real) if (!x.fx && patched.some(([a, e]) => x.a <= e && a <= x.e))
+      out.lines.push(`${who}${x.name} isn't in the patch but sits on channels the app uses (ch ${x.a}-${x.e})`);
+  }
+  return out;
+}
+
+function realLightBanner(fl) {
+  const p = realLightProblems(fl);
+  if (!p.lines.length) return null;
+  return h("div", { class: "note bad", style: { marginTop: "10px" } },
+    h("strong", null, "The real lights don't match the app."),
+    h("div", null, "Until fixed, these lights can get another light's colour on their control channel and save it, stick on their saved look, or run the factory demo. The app holds their control channel at zero meanwhile."),
+    h("ul", { style: { margin: "6px 0", paddingLeft: "18px" } }, p.lines.slice(0, 8).map(l => h("li", null, l)),
+      p.lines.length > 8 ? h("li", null, `and ${p.lines.length - 8} more`) : null),
+    p.pushable ? h("button", { class: "btn small gold", onclick: () => pushAddresses(fl) }, "Send addresses to fixtures") : null);
 }
 
 async function applyScan(fl, b, res) {

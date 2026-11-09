@@ -34,6 +34,7 @@ class App:
         self.sim: Optional[EBoxSimulator] = None
         self.sim_port = sim_port
         self.scan_lock = threading.Lock()
+        self.artrdm_lock = threading.Lock()  # Art-Net RDM shares one socket: one box at a time
         self.pause_during_rdm = True
         # (box ip, model_id) -> {personality index: {"mode": n or None, "footprint": f, "description": s}}
         self.personalities: dict = {}
@@ -108,19 +109,168 @@ class App:
         self.personalities[key] = pmap
         return pmap
 
-    def scan(self, fl: dict, box_id: str, flush: bool = False) -> dict:
+    # ---------------------------------------------------------- box check
+    def check_box(self, fl: dict, box_id: str) -> dict:
+        """Read what the box is actually set to and compare it with what the app needs.
+        Each issue: {key, level: error|warn|info, text, fix: "box" | "app" | None}."""
+        box = next((b for b in fl["boxes"] if b["id"] == box_id), None)
+        if box is None:
+            raise KeyError("box not found")
         ip, port, pa = self.box_target(fl, box_id)
+        name = box.get("name") or "The box"
+        issues = []
+
+        def add(key, level, text, fix=None, **extra):
+            issues.append(dict(key=key, level=level, text=text, fix=fix, **extra))
+
+        sim = bool(self.sim) and ip == "127.0.0.1"
+        art = self.artnet_alive(ip, port, wait=1.0)
+        web, st = False, {}
+        if not sim:
+            try:
+                st = Reap(ip, timeout=3.0).status()
+                web = True
+            except ReapError:
+                pass
+        res = {"box_id": box_id, "ip": ip, "artnet": art, "web": web, "issues": issues}
+        if not art and not web:
+            add("unreachable", "error", "%s isn't answering at %s. Check its power and network cable, and that "
+                "this iPad or computer is on the same network as the box." % (name, ip))
+            res["ok"] = False
+            return res
+        macs = self.ctl.macs_for(ip)
+        if st.get("mac") and st["mac"].lower() not in macs:
+            macs = sorted(set(macs) | {st["mac"].lower()})
+        if len(macs) > 1:
+            add("ip_clash", "error", "%d boxes are answering at %s. Each box needs its own IP: change one on its "
+                "front panel (Personality > Ethernet settings)." % (len(macs), ip))
+        twins = [b.get("name") or "Box" for b in fl["boxes"] if b["id"] != box_id and b.get("ip") == ip]
+        if twins:
+            add("ip_twin", "error", "%s and %s on this float are both set to %s. Set each box's own IP on the Patch tab."
+                % (name, ", ".join(twins), ip))
+        if web:
+            reap = Reap(ip, timeout=3.0)
+            try:
+                i = Reap.option_index(reap.dmx_settings().get("dmxi"), Reap.DMX_INPUTS)
+                if i is not None and i != 3:
+                    add("dmx_input", "error", "DMX input is set to %s. It must be Ethernet, or the lights ignore the app."
+                        % Reap.DMX_INPUTS[i], fix="box")
+            except ReapError:
+                add("unread_dmx", "info", "Couldn't read the box's DMX input setting.")
+            try:
+                i = Reap.option_index(reap.eth_settings().get("ethm"), Reap.ETH_MODES)
+                if i is not None and i != 0:
+                    add("eth_mode", "error", "Ethernet mode is %s. It must be Art-NET." % Reap.ETH_MODES[i], fix="box")
+            except ReapError:
+                add("unread_eth", "info", "Couldn't read the box's Ethernet mode.")
+            try:
+                o = reap.other_settings()
+                if o.get("ebm") and o["ebm"] != "pass-through":
+                    add("pass_through", "error", "E-box mode is %s. It must be Pass-Thr so each light has its own "
+                        "address." % o["ebm"], fix="box")
+                if o.get("ic_od") == "disabled":
+                    add("playing", "info", "The box is playing its saved look. Save tab > Back to app control to use the app.")
+            except ReapError:
+                add("unread_other", "info", "Couldn't read the box's E-box mode.")
+        elif not sim:
+            add("no_web", "error", "%s answers Art-Net but its web page doesn't, so the app can't scan or check "
+                "its lights. Wait 30 s after power-up and try again." % name)
+        if art:
+            with self.ctl._lock:
+                pas = sorted({x for n in self.ctl.nodes.values() if n.get("ip") == ip
+                              for x in n.get("output_port_addresses", [])})
+            if pas and pa not in pas:
+                fmt = lambda x: "%d:%d:%d" % (x >> 8, (x >> 4) & 15, x & 15)
+                add("universe", "error", "The box listens on Art-Net %s but the app sends %s." % (fmt(pas[0]), fmt(pa)),
+                    fix="app", box_pa=pas[0])
+        elif web and not any(x["key"] == "eth_mode" for x in issues):
+            add("no_artnet", "error", "The box's web page answers but it doesn't answer Art-Net, so it won't follow the app.")
+        res["ok"] = not any(x["level"] == "error" for x in issues)
+        return res
+
+    def fix_box(self, fl: dict, box_id: str) -> dict:
+        """Put right everything check_box can fix, then check again."""
+        chk = self.check_box(fl, box_id)
+        keys = {x["key"] for x in chk["issues"] if x.get("fix")}
+        if not keys:
+            return {"fixed": [], "restarting": False, "check": chk}
+        ip, _, _ = self.box_target(fl, box_id)
+        fixed = []
+        uni = next((x for x in chk["issues"] if x["key"] == "universe"), None)
+        if uni:
+            v = uni["box_pa"]
+            with self.store.lock:
+                for b in fl["boxes"]:
+                    if b["id"] == box_id:
+                        b["net"], b["subnet"], b["universe"] = v >> 8, (v >> 4) & 15, v & 15
+                fl["rev"] = fl.get("rev", 0) + 1
+                self.store.bump(fl)
+            self.engine.refresh()
+            fixed.append("universe")
+        box_keys = keys & {"pass_through", "dmx_input", "eth_mode"}
+        if box_keys:
+            reap = Reap(ip)
+            if "pass_through" in box_keys:
+                reap.set_other(pass_through=True)
+            if "dmx_input" in box_keys:
+                reap.set_dmx_input(3)
+            if "eth_mode" in box_keys:
+                reap.set_eth_mode(0)  # last: it's the one that touches the network settings
+            reap.restart()
+            self.box_playing.pop(ip, None)
+            fixed += sorted(box_keys)
+        return {"fixed": fixed, "restarting": bool(box_keys)}
+
+    # ---------------------------------------------------------- scan
+    BLOCKS_SCAN = ("unreachable", "ip_clash", "ip_twin", "no_web", "pass_through")
+
+    def scan_all(self, fl: dict, box_ids=None, flush: bool = False) -> dict:
+        """Scan every box on the float together: one pause of the output, each box searched at the same time."""
+        ids = [b["id"] for b in fl["boxes"] if b.get("ip") and (not box_ids or b["id"] in box_ids)]
+        if not ids:
+            raise ValueError("Set the box's IP address first.")
+        results = {}
+
+        def one(bid):
+            try:
+                results[bid] = self._scan_box(fl, bid, flush)
+            except Exception as e:  # one box failing never hides the others' results
+                results[bid] = {"box_id": bid, "error": str(e), "devices": []}
+        with self.rdm_session():
+            threads = [threading.Thread(target=one, args=(bid,), daemon=True) for bid in ids]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        return {"results": results}
+
+    def scan(self, fl: dict, box_id: str, flush: bool = False) -> dict:
+        with self.rdm_session():
+            r = self._scan_box(fl, box_id, flush)
+        if r.get("error"):
+            raise RuntimeError(r["error"])
+        return r
+
+    def _scan_box(self, fl: dict, box_id: str, flush: bool = False) -> dict:
+        """One box's scan. The caller holds the RDM session (output paused)."""
+        ip, port, pa = self.box_target(fl, box_id)
+        chk = self.check_box(fl, box_id)
+        blocking = [x for x in chk["issues"] if x["key"] in self.BLOCKS_SCAN]
+        if blocking:
+            return {"box_id": box_id, "ip": ip, "error": blocking[0]["text"], "devices": [], "check": chk}
         # Preferred: the box's own web page runs RDM on its outputs. On a real E-Box Remote (6.6)
         # this finds every Calumma in Pass-Thr, while Art-Net RDM only ever sees the box itself.
         reap = Reap(ip)
-        if reap.available():
+        if chk["web"]:
             expected = sum(1 for fx in fl["fixtures"] if fx.get("box_id") == box_id)
-            found = {}
-            with self.rdm_session():
-                for _ in range(2):  # the box's search sometimes misses a light; one retry fills the gaps
-                    found.update({d["d_uid"]: d for d in reap.discover()})
-                    if len(found) >= expected:
-                        break
+            found, counts, repeats = {}, [], 0
+            for _ in range(3):  # the box's search sometimes misses a light; repeat searches fill the gaps
+                got = {d["d_uid"]: d for d in reap.discover()}
+                counts.append(len(got))
+                repeats += getattr(reap, "last_repeats", 0)
+                found.update(got)
+                if len(found) >= expected and len(got) == len(found):
+                    break  # every expected light, all in one clean search
             devs = list(found.values())
             self.reap_devices[ip] = {reap_uid_str(d["d_uid"]): d for d in devs}
             # A light left "unknown" (address cleared) by a failed change gets its real values back.
@@ -135,9 +285,12 @@ class App:
                         fl["rev"] = fl.get("rev", 0) + 1
                         self.store.bump(fl)
             devices = [reap_scan_entry(d) for d in sorted(devs, key=lambda d: d.get("dmx_a", 0))]
+            self.engine.set_guard(box_id, devices)
             return {"box_id": box_id, "ip": ip, "port_address": pa, "devices": devices, "via": "box web page",
-                    "time": time.time()}
-        with self.rdm_session():
+                    "time": time.time(), "check": chk, "expected": expected, "searches": counts,
+                    "unstable": len(set(counts)) > 1 or repeats > 0, "repeats": repeats,
+                    "terminators_on": sum(1 for d in devs if d.get("dmx_t") == "on")}
+        with self.artrdm_lock:
             uids = self.ctl.tod(ip, port, pa, flush=flush)
             devices = []
             for uid in uids:
@@ -157,7 +310,8 @@ class App:
                 except RdmError as e:
                     d.update(ok=False, error=str(e))
                 devices.append(d)
-        return {"box_id": box_id, "ip": ip, "port_address": pa, "devices": devices, "time": time.time()}
+        self.engine.set_guard(box_id, devices)
+        return {"box_id": box_id, "ip": ip, "port_address": pa, "devices": devices, "time": time.time(), "check": chk}
 
     def mfr_params(self, ip, port, pa, uid, with_values: bool = True) -> list:
         """Manufacturer-specific RDM parameters (0x8000-0xFFDF), described by the fixture itself."""
@@ -622,6 +776,13 @@ class Handler(BaseHTTPRequestHandler):
             if rest == ["scan"] and method == "POST":
                 b = self._body()
                 return self._json(app.scan(fl, b["box_id"], bool(b.get("flush"))))
+            if rest == ["scan_all"] and method == "POST":
+                b = self._body()
+                return self._json(app.scan_all(fl, b.get("box_ids"), bool(b.get("flush"))))
+            if rest == ["check_box"] and method == "POST":
+                return self._json(app.check_box(fl, self._body()["box_id"]))
+            if rest == ["fix_box"] and method == "POST":
+                return self._json(app.fix_box(fl, self._body()["box_id"]))
             if rest == ["box"] and method == "POST":
                 return self._box_action(fl, self._body())
             if rest == ["rdm"] and method == "POST":
@@ -919,6 +1080,8 @@ class Handler(BaseHTTPRequestHandler):
             store.flush()  # the lights already changed: get it on disk now, not up to a second later
         if not errors:
             eng.set_hold(False)
+        if done and not errors:
+            eng.clear_guard([bx["id"] for bx in fl["boxes"]])  # the lights now sit where the patch says
         return {"ok": not errors, "done": done, "errors": errors, "held": bool(errors)}
 
     def _settings_view(self):
