@@ -1159,7 +1159,7 @@ function jobBox() {
     h("div", { class: "progress" }, h("div", { style: { width: Math.round(job.progress * 100) + "%" } })),
     job.message ? h("div", { style: { marginTop: "6px" } }, job.message) : null,
     job.skipped && job.skipped.length ? h("div", { style: { marginTop: "6px", fontSize: "13px" } }, "Skipped: " + job.skipped.map(s => s.label + " (" + s.why + ")").join(", ")) : null,
-    !running && job.state === "done" && job.kind === "save" ? h("div", { style: { marginTop: "6px" } }, "Next: press “Check what’s saved” and watch the float.") : null));
+    !running && job.state === "done" && job.kind === "save" ? h("div", { style: { marginTop: "6px" } }, "Next: press “Play saved look” below and watch the float.") : null));
   return box;
 }
 
@@ -1248,7 +1248,11 @@ async function refreshBoxOut(fl) {
       st.error ? null : h("button", { class: "btn " + (playing ? "" : "gold"), style: { marginTop: "6px" }, onclick: async () => {
         const msg = playing ? "Give control back to the app? The box restarts (about 10 s)." : "Play the saved look? The box stops listening to the app and restarts (about 10 s).";
         if (!(await confirmBox(playing ? "Back to app control" : "Play saved look", msg, "Yes"))) return;
-        try { await api("POST", `/api/floats/${fl.id}/box`, { box_id: b.id, action: "output_data", enabled: playing }); toast("Box restarting…", "ok"); }
+        try {
+          const r = await api("POST", `/api/floats/${fl.id}/box`, { box_id: b.id, action: "output_data", enabled: playing });
+          if (r.engine) { S.engine = r.engine; renderStatus(); renderRail(); renderFloatHead(); }
+          toast(playing ? "Box restarting. Tap any control to take over again." : "App released. Box restarting to play the saved look…", "ok");
+        }
         catch (e) { toast(e.message, "bad"); }
         setTimeout(() => refreshBoxOut(fl), 12000);
       } }, playing ? "Back to app control" : "Play saved look")));

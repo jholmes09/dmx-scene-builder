@@ -25,6 +25,7 @@ final class API {
     private var identifyTimers: [String: DispatchWorkItem] = [:]
     private let timersLock = NSLock()
     private var reapDevices: [String: [String: JSON]] = [:]   // box ip -> {uid_str: device dict from the box's page}
+    private var boxPlaying: [String: Bool] = [:]   // box ip -> true while it plays its saved look (last seen or set); guarded by devLock
     private let devLock = NSRecursiveLock()
 
     init(store: Store, ctl: ArtNetController, webRoot: URL?) {
@@ -231,7 +232,10 @@ final class API {
             let (running, jobFloat, active) = eng.withLock { (eng.job["state"].string == "running", eng.job["float"].string, eng.activeFloat) }
             if running && jobFloat != fid { throw AppError.runtime("A save is running on another float. Wait for it to finish.") }
             if !(running && active == fid) {
-                if let fid = fid, store.getFloat(fid) == nil { throw AppError.key("float not found") }
+                if let fid = fid {
+                    guard let fl = store.getFloat(fid) else { throw AppError.key("float not found") }
+                    try refuseIfPlaying(fl)
+                }
                 eng.setActive(fid, output: true)
             }
         case "release": eng.release()
@@ -678,16 +682,40 @@ final class API {
     }
 
     // ------------------------------------------------------------ box-wide settings
+    private func setPlaying(_ ip: String, _ on: Bool) { devLock.lock(); boxPlaying[ip] = on; devLock.unlock() }
+    private func isPlaying(_ ip: String) -> Bool { devLock.lock(); defer { devLock.unlock() }; return boxPlaying[ip] ?? false }
+
+    /// A box on "Play saved look" ignores the app. Going live would claim control it doesn't have.
+    func refuseIfPlaying(_ fl: JSON) throws {
+        for box in fl["boxes"].array ?? [] {
+            let ip = box["ip"].string ?? ""
+            if ip.isEmpty { continue }
+            var playing: Bool
+            if let od = try? Reap(ip, timeout: 2.0).otherSettings()["ic_od"].string {
+                playing = od == "disabled"
+                setPlaying(ip, playing)
+            } else {
+                playing = isPlaying(ip)   // no answer: restarting, other gear or a test box; go by what the app last set
+            }
+            if playing {
+                throw AppError.runtime("\(box["name"].pyStr) is playing its saved look, so the app can't control it. On the Save tab, press 'Back to app control' first.")
+            }
+        }
+    }
+
     private func boxAction(_ fl: JSON, _ b: JSON) throws -> Response {
         let t = try boxTarget(fl, try req(b, "box_id").pyStr)
         let reap = Reap(t.ip)
         if b["action"].string == "output_data" {
             engine.release()
-            try reap.setOther(outputData: try req(b, "enabled").truthy)
+            let enabled = try req(b, "enabled").truthy
+            try reap.setOther(outputData: enabled)
+            setPlaying(t.ip, !enabled)
             reap.restart()
-            return .json(["ok": true, "restarting": true])
+            return .json(["ok": true, "restarting": true, "engine": engine.status()])
         }
         let s = try reap.otherSettings()
+        setPlaying(t.ip, s["ic_od"].string == "disabled")
         return .json(["ok": true, "output_data": s["ic_od"], "mode": s["ebm"], "dmx_hold": s["dmxh"]])
     }
 

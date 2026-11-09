@@ -352,14 +352,23 @@ final class EndToEndTests: XCTestCase {
         var r = ok("POST", "/api/floats/\(fid)/box", ["box_id": .string(bid)])
         XCTAssertEqual(r["output_data"], "enabled")
         _ = http("POST", "/set", ["restart_s": 1.0])
+        _ = ok("POST", "/api/output", ["action": "activate", "float_id": .string(fid)])
         r = ok("POST", "/api/floats/\(fid)/box", ["box_id": .string(bid), "action": "output_data", "enabled": false])
         XCTAssertEqual(r["restarting"], true)
+        XCTAssertEqual(r["engine"]["output"], false, "app lets go and the screen is told")
         XCTAssertEqual(box()["ic_od"], "disabled")
+        // Mid-restart and after: Go live is refused while the box plays its saved look.
+        refused("POST", "/api/output", ["action": "activate", "float_id": .string(fid)], "playing its saved look")
         XCTAssertTrue(waitFor { !self.box()["offline"].truthy }, "box back after restart")
         r = ok("POST", "/api/floats/\(fid)/box", ["box_id": .string(bid)])
         XCTAssertEqual(r["output_data"], "disabled")
+        refused("POST", "/api/output", ["action": "activate", "float_id": .string(fid)], "Back to app control")
+        XCTAssertFalse(status()["output"].truthy)
         _ = ok("POST", "/api/floats/\(fid)/box", ["box_id": .string(bid), "action": "output_data", "enabled": true])
         XCTAssertEqual(box()["ic_od"], "enabled")
+        XCTAssertTrue(waitFor { !self.box()["offline"].truthy }, "box back after restart")
+        _ = ok("POST", "/api/output", ["action": "activate", "float_id": .string(fid)])
+        XCTAssertTrue(status()["output"].truthy, "back under app control")
     }
 
     // ------------------------------------------------------------ iOS lifecycle

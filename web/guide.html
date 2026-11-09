@@ -19,9 +19,9 @@
   .card p { margin: 6px 0; }
   .card ul, .card ol.plain { margin: 6px 0; padding-left: 22px; }
   .card ul li, .card ol.plain li { margin: 4px 0; }
-  .pins-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
-  .pins-table th, .pins-table td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
-  .pins-table th { color: var(--gold); font: 700 11px var(--caps); letter-spacing: .1em; text-transform: uppercase; }
+  .bt { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
+  .bt th, .bt td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+  .bt th { color: var(--gold); font: 700 11px var(--caps); letter-spacing: .1em; text-transform: uppercase; }
   .tt-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
   .tt-table th, .tt-table td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
   .tt-table th { color: var(--gold); font: 700 11px var(--caps); letter-spacing: .1em; text-transform: uppercase; }
@@ -38,10 +38,12 @@
     .note.warn { background: #f2f2f2 !important; border-left-color: #000 !important; }
     .note.bad { background: #f2f2f2 !important; border-left-color: #000 !important; }
     .note.ok { background: #f2f2f2 !important; border-left-color: #666 !important; }
-    .pins-table th, .pins-table td, .tt-table th, .tt-table td { border-color: #999 !important; }
+    .bt th, .bt td, .tt-table th, .tt-table td { border-color: #999 !important; }
     .steps li::before { border-color: #000 !important; color: #000 !important; }
     .guide-wrap { max-width: 100%; padding: 0; }
   }
+  .bt td:first-child { white-space: nowrap; font-weight: 700; width: 1%; }
+  .bt td { vertical-align: top; }
 </style>
 </head>
 <body>
@@ -50,220 +52,146 @@
     <img src="img/logo.png" alt="Jeff Holmes Presents">
     <span class="kicker">Jeff Holmes Presents</span>
     <h1>Field guide</h1>
-    <span class="guide-sub">DMX Scene Builder. Print this page, or keep it open on the iPad.</span>
+    <span class="guide-sub">DMX Scene Builder</span>
   </div>
-
   <div class="print-btn-row">
     <button class="btn gold" onclick="window.print()">Print this guide</button>
   </div>
 
-  <!-- a. What to bring -->
   <div class="card">
-    <span class="kicker small">Before you leave</span>
-    <h2>What to bring</h2>
-    <ul>
-      <li>The Mac, plus its charger</li>
-      <li>The USB-C to Ethernet adapter, always the same one. macOS remembers the IP address for each adapter, so swapping adapters means setting the IP again.</li>
-      <li>The iPad</li>
-      <li>A travel router</li>
-      <li>A normal network (Ethernet) patch cable, plus a spare</li>
-      <li>A small screwdriver, in case you need the box's menu under its cover</li>
-    </ul>
-    <p>Plug the patch cable from the Mac's Ethernet adapter (or the travel router) straight into the E-Box's network port.</p>
-    <p class="muted">On some E-Box versions the display and buttons sit under the top cover.</p>
-    <div class="note bad">Always disconnect mains power before connecting or disconnecting LED modules.</div>
-  </div>
-
-  <!-- b. One-time Mac setup -->
-  <div class="card">
-    <span class="kicker small">Do this tonight, before the trip</span>
-    <h2>One-time Mac setup</h2>
+    <span class="kicker small">Start here</span>
+    <h2>Connect</h2>
     <ol class="plain">
-      <li>Open System Settings &gt; Network &gt; the USB Ethernet adapter &gt; Details &gt; TCP/IP.</li>
-      <li>Set Configure IPv4 to Manually.</li>
-      <li>IP address 2.0.0.10, Subnet mask 255.0.0.0, Router left blank.</li>
-      <li>Double-click <strong>DMX Scene Builder.command</strong> in the dmx-scene-builder folder.</li>
-      <li>The first time, macOS may ask two questions: whether to allow Terminal on the Local Network, and whether to accept incoming connections. Say Allow to both. (You can check this later at System Settings &gt; Privacy &amp; Security &gt; Local Network &gt; Terminal, make sure it's on.)</li>
-      <li>Test it: on the Mac, open <span class="mono">http://localhost:8080</span> in a browser. You should see DMX Scene Builder.</li>
+      <li>Power the float. Wait about 30 s for the E-Box to start.</li>
+      <li>Put the iPad on the same network as the E-Box.</li>
+      <li>Open DMX Scene Builder.</li>
+      <li>Pick the float at the top.</li>
+      <li>Tap any light control. The app goes live by itself.</li>
     </ol>
-    <p>Also install the free <strong>Robe Toolkit</strong> (from robe.cz) as a backup addressing tool, in case the app can't talk to a fixture directly.</p>
-    <div class="note warn">Quit Robe Toolkit, Luminair, xLights, and any other lighting app before running DMX Scene Builder. Two apps trying to use the same network port (the Art-Net port) will fight each other, and neither will work right.</div>
+    <div class="note">First time on a float with no box IP yet: <strong>Patch</strong> tab &gt; <strong>Find</strong> &gt; pick the box. Box IPs don't change, so this is once per float.</div>
+    <div class="note bad">Turn the power off before plugging or unplugging lights.</div>
   </div>
 
-  <!-- c. Connecting at the shop -->
   <div class="card">
-    <span class="kicker small">On site</span>
-    <h2>Connecting at the shop</h2>
-    <p>Recommended setup:</p>
-    <ul>
-      <li>iPad joins the travel router's Wi-Fi</li>
-      <li>Mac also joins the travel router's Wi-Fi</li>
-      <li>Mac's Ethernet port connects by cable to the E-Box</li>
-    </ul>
-    <div class="note">With a travel router (like a GL.iNet), leave the Mac's network adapter on "Using DHCP." The router hands out the address, which may not be 2.x.x.x. The static 2.0.0.10 setting below is only for connecting a cable straight from the Mac to the box, with no router.</div>
-    <p>On the iPad, open Safari and go to the address shown in the DMX Scene Builder window on the Mac, something like <span class="mono">http://jeffs-macbook.local:8080</span> or <span class="mono">http://192.168.x.x:8080</span>.</p>
-    <div class="note warn">Turn off "client isolation" (sometimes called "AP isolation") on the travel router's settings. If it's on, devices on the router can't see each other, and the iPad won't be able to reach the Mac.</div>
-    <p>In Safari, tap the share icon and choose "Add to Home Screen." That gives you an icon that opens DMX Scene Builder full screen, like an app.</p>
-    <div class="note">If the computer has more than one active network connection (Wi-Fi and Ethernet, say), open <strong>Setup</strong> and pick which one to search on, under "Network adapter." If Find can't reach the box, this is usually why.</div>
-    <h3>Fallback: no network needed</h3>
-    <p>If the network setup is giving trouble, use <strong>Sidecar</strong> instead: the iPad becomes a second screen for the Mac, over its own cable or Wi-Fi connection to the Mac, with no router involved at all.</p>
+    <span class="kicker small">Always on screen</span>
+    <h2>Top bar</h2>
+<table class="bt"><tr><th>Button</th><th>What it does</th></tr>
+<tr><td>Float list</td><td>Pick the float to control.</td></tr>
+<tr><td>Go live</td><td>Take control of the float's lights. Tapping any control does this too.</td></tr>
+<tr><td>Released</td><td>Let go of the lights. The app stops sending.</td></tr>
+<tr><td>Blackout</td><td>All lights on this float off. Tap again to bring them back.</td></tr>
+<tr><td>Set box IP</td><td>Shown when the float has no box yet. Opens Patch.</td></tr>
+<tr><td>⚙</td><td>Setup (see below).</td></tr>
+</table>
+    <p><strong>Status messages</strong></p><table class="bt"><tr><th>Message</th><th>Meaning</th></tr>
+<tr><td>Live · float</td><td>The app is controlling the lights.</td></tr>
+<tr><td>Looking for box…</td><td>Just went live, waiting for the box to answer.</td></tr>
+<tr><td>Box not answering</td><td>Check the box's power and network cable.</td></tr>
+</table>
   </div>
 
-  <!-- d. E-Box settings -->
   <div class="card">
-    <span class="kicker small">Box menu</span>
-    <h2>E-Box settings</h2>
-    <div class="note">Settings only take effect after a power cycle. Turn the box off, then back on, after changing anything below.</div>
-    <ul>
-      <li><strong>Personality &gt; DMX Input</strong> = Ethernet</li>
-      <li><strong>Personality &gt; Ethernet Settings &gt; Ethernet mode</strong> = Artnet</li>
-      <li><strong>Art-Net Settings &gt; Net / Sub-Net / Universe</strong>, default is 0 / 0 / 0. Match these numbers in the app.</li>
-    </ul>
-    <p><strong>E-box mode:</strong> the Calumma XS modules usually run in <strong>Pass-Thr</strong> (pass through), where each module has its own DMX address.</p>
-    <p><strong>Info &gt; IP Addr</strong> shows the box's own IP address (factory default starts with 2, and is generated from the box's hardware ID).</p>
-    <h3>REAP (the box's built-in web page)</h3>
-    <p>Open <span class="mono">http://&lt;box IP&gt;</span> in a browser. Login is <span class="mono">robe</span> / <span class="mono">2479</span>.</p>
-    <ul>
-      <li>The Devices screen has a "Discover devices" button that lists the modules plugged in.</li>
-      <li>From there you can change a module's address and DMX preset (mode), and press Start identify to make one module flash.</li>
-    </ul>
-    <div class="note warn">DMX Hold (holding the last look when data stops) is not available in Pass-Thr mode.</div>
+    <span class="kicker small">Tab 1</span>
+    <h2>Look</h2>
+<table class="bt"><tr><th>Button</th><th>What it does</th></tr>
+<tr><td>Tap a light</td><td>Select it. Tap more to select several. Tap again to drop one.</td></tr>
+<tr><td>All / Tunable white / RGB + White / None</td><td>Select by type.</td></tr>
+<tr><td>Brightness</td><td>Off, 25, 50, 75, 80 or 100%.</td></tr>
+<tr><td>White</td><td>Colour temperature presets, or the slider.</td></tr>
+<tr><td>Color</td><td>Colour picker (RGB lights only).</td></tr>
+<tr><td>Output: Even / Max output</td><td>Tunable white in Mode 7 only. Even keeps all temperatures equally bright. Max output is brighter at 4000K.</td></tr>
+<tr><td>+ Save this color</td><td>Keep the current colour as a button. Saved colours show on every float.</td></tr>
+<tr><td>Saved colors</td><td>Tap one to apply it to the selected lights.</td></tr>
+<tr><td>Identify</td><td>Flash the selected light.</td></tr>
+<tr><td>Save look</td><td>Keep the whole float's look in the app, by name.</td></tr>
+<tr><td>A look's name</td><td>Tap to bring that look back.</td></tr>
+</table>
   </div>
 
-  <!-- e. Daily workflow -->
   <div class="card">
-    <span class="kicker small">Every float, every day</span>
-    <h2>Daily workflow in the app</h2>
-    <ol class="steps">
-      <li>Pick the float in the list on the left.</li>
-      <li>Go to the <strong>Patch</strong> tab.</li>
-      <li>Press <strong>Find boxes on network</strong>, then press <strong>Use for E-Box A</strong> (or B) on the box that answers.</li>
-      <li>Press <strong>Scan fixtures (RDM)</strong>.</li>
-      <li>Scan matches each light to your patch by address. A ✓ in the Light column means the real light matches. Use <strong>Identify</strong> to flash one.</li>
-      <li>A light Scan can't match shows under the list: Identify it, then pick which fixture it is.</li>
-      <li>If addresses clash, press <strong>Auto-address</strong>, then <strong>Send patch addresses to fixtures</strong>.</li>
-      <li>Press <strong>Go live on this float</strong>.</li>
-      <li>Go to the <strong>Look</strong> tab. Tap individual lights, or use All / Tunable white / RGB + White, then set Brightness, Colour temperature, or Colour.</li>
-      <li>Press <strong>Save current look</strong> (it's stored on the Mac, per float).</li>
-    </ol>
-    <div class="note">
-      <strong>Multi-select:</strong> tap as many lights as you like. Every selected light changes together when you set Brightness, Colour temperature, or Colour. Tap a selected light again to drop it from the selection.
-    </div>
-    <div class="note">
-      After a Scan, each fixture row has a <strong>⋯</strong> button. It shows that fixture's own maker settings (like Terminator active) and lets you change them.
-    </div>
-    <div class="note warn">
-      If Scan says the box didn't answer RDM: open REAP, or use Robe Toolkit, to set addresses and modes there instead. Type the same values into the Fixtures table in the app, then use the <strong>Address finder</strong> to confirm each one. It lights one fixture-sized block of channels at a time, so watch the float and note which light comes on.
-    </div>
+    <span class="kicker small">Tab 2</span>
+    <h2>Patch</h2>
+<table class="bt"><tr><th>Button</th><th>What it does</th></tr>
+<tr><td>Find</td><td>Search the network for E-Boxes. Pick one to use it.</td></tr>
+<tr><td>IP</td><td>The box's address. Set once.</td></tr>
+<tr><td>Net · Sub · Uni</td><td>Must match the box. Normally 0 · 0 · 0.</td></tr>
+<tr><td>Scan</td><td>Read the lights plugged into the box.</td></tr>
+<tr><td>Type / Mode / Address</td><td>Set per light in the list.</td></tr>
+<tr><td>Send addresses to fixtures</td><td>Write the list's addresses and modes into the real lights. Shown after a Scan.</td></tr>
+<tr><td>Identify</td><td>Flash that light.</td></tr>
+<tr><td>✕</td><td>Remove the light from the patch.</td></tr>
+<tr><td>+</td><td>Add a light by hand.</td></tr>
+<tr><td>Auto-address</td><td>Give every light its own address with no overlaps.</td></tr>
+<tr><td>Address finder</td><td>Lights one address at a time so you can see which light is which.</td></tr>
+<tr><td>Float settings</td><td>Code, name, how it runs in the parade, Patch sheet, + Box, Delete float.</td></tr>
+</table>
   </div>
 
-  <!-- e2. Saved colors -->
   <div class="card">
-    <span class="kicker small">Look tab</span>
-    <h2>Saved colors</h2>
-    <p>In the <strong>Look</strong> tab, select a light and press <strong>+ Save this color</strong>. You can also save its brightness at the same time. Saved colors appear on every float, not just the one you saved it from.</p>
-    <p>To use one: select any lights first (tap one, tap several, or use All / Tunable white / RGB + White), then tap a saved color to apply it to all of them at once.</p>
-    <p class="muted">RGB colors skip tunable white lights, since they can't show color. White colors work on both RGB and tunable white lights.</p>
-  </div>
-
-  <!-- f. Stand-alone save -->
-  <div class="card">
-    <span class="kicker small">Making the float run on its own</span>
-    <h2>Stand-alone save</h2>
-    <p>The <strong>Save to fixtures</strong> tab has two ways to make a float hold its look with nothing connected. Try option 1 first.</p>
-
-    <h3>Option 1: Save by RDM</h3>
-    <p>Works in any mode, including tunable white. No Scan needed: it finds every fixture on the box by itself.</p>
+    <span class="kicker small">Tab 3</span>
+    <h2>Save</h2>
+    <p>Stores the look inside the lights so the float runs with no iPad.</p>
     <ol class="plain">
-      <li>Go to the <strong>Save to fixtures</strong> tab.</li>
-      <li>With the float live and showing the look you want, press <strong>Save look</strong> on the Save tab.</li>
-      <li>The app sets each fixture's own manufacturer setting called <strong>Init position LEDs</strong> to 1. It finds that setting by name in the fixture's own settings list. This keeps the current look as the fixture's power-on look.</li>
-      <li>Check it: press <strong>Release</strong>. If the look holds, you're done.</li>
-      <li>If it doesn't hold: on the box, set <strong>Personality &gt; Output Data</strong> to Disabled and power cycle the box, then check again.</li>
-    </ol>
-
-    <h3>Option 2: Save with Mode 7</h3>
-    <p>Only <strong>Mode 7</strong> (15 channels) has this save command, and it's documented for the RGB + White fixtures. Steps:</p>
-    <ol class="plain">
-      <li>Go to the <strong>Save to fixtures</strong> tab.</li>
-      <li>Switch the fixtures to Mode 7 (this re-addresses the box; the status pill shows "Re-addressing, output at zero" while it happens).</li>
-      <li>Set the look.</li>
-      <li>Press <strong>Save look into fixture(s)</strong>. This holds the save command for about 5 seconds.</li>
-      <li>Press <strong>Check what's saved</strong>. The live look goes dark, and the fixtures show their stored look for 6 seconds.</li>
-      <li>On the box: <strong>Personality &gt; Output Data</strong> = Disabled (or the same thing in REAP's Personality screen, then press the red Reset now).</li>
-      <li>Power cycle the box.</li>
-      <li>The lights should come up in the saved look, with nothing connected.</li>
-    </ol>
-    <div class="note">To undo: set Output Data back to Enabled and power cycle again.</div>
-    <div class="note bad">Never leave a "Special function" value parked partway through. The app handles the timing for you, so just use the button.</div>
+      <li><strong>Switch to Mode 7</strong>: needed once per float.</li>
+      <li><strong>Go to Look</strong>: set the look.</li>
+      <li><strong>Save look</strong>: writes it into the lights (about 5 s).</li>
+      <li><strong>Play saved look</strong>: the app lets go and the box restarts (about 10 s). The lights should come up in the saved look. This is the check.</li>
+    </ol><table class="bt"><tr><th>Button</th><th>What it does</th></tr>
+<tr><td>Play saved look</td><td>Box runs on its own. The app can't control it, and Go live says so.</td></tr>
+<tr><td>Back to app control</td><td>Box follows the app again (restarts, about 10 s).</td></tr>
+</table>
+    <div class="note">Before the parade, leave every float on <strong>Play saved look</strong>.</div>
   </div>
 
-  <!-- g. Tunable white warning -->
   <div class="card">
-    <span class="kicker small">Read this before day one</span>
-    <h2>Tunable white warning</h2>
-    <div class="note warn">
-      <strong>Option 1, save by RDM, is the likely path for tunable white fixtures.</strong> The Calumma chart only lists Modes 11, 12, and 13 for tunable white, and none of them has a save channel the way Mode 7 does, but the RDM save does not depend on mode.
-    </div>
-    <p><strong>Day one plan:</strong></p>
+    <span class="kicker small">Floats on show control</span>
+    <h2>Parade tab</h2>
+    <p>Shown instead of Save when Float settings says <strong>Live DMX input</strong>.</p>
     <ol class="plain">
-      <li>Scan a tunable white fixture, then open <strong>Patch &gt; Scan &gt; Settings</strong> on that fixture and look for "Init position LEDs".</li>
-      <li>If it's there, use <strong>Save look</strong> on the Save tab.</li>
-      <li>If a fixture has no "Init position" setting, the app's Settings list shows whatever it does offer instead. In that case, fall back to: putting a small DMX or Art-Net playback unit on the float to hold the look, or asking Anolis or Robe support how tunable white modules store a power-on look.</li>
+      <li>Pick the mode show control wants.</li>
+      <li><strong>Auto-address</strong>, then <strong>Send addresses to fixtures</strong>.</li>
+      <li>Check with Identify or the Address finder.</li>
+      <li>Give the programmer the <strong>Patch sheet</strong>.</li>
+      <li>Press <strong>Released</strong>.</li>
     </ol>
-    <p>Draft question for support, ready to copy and send:</p>
-    <div class="note">
-      "We have Anolis Calumma tunable-white modules on Anolis E-Box Remote boxes, run in Pass-Thr mode. We need each float to power on showing a fixed look, with no console connected. The DMX chart shows Modes 11/12/13 for tunable white with no 'save to fixture' channel, unlike Mode 7 on the RGBW modules. Is there a way for a tunable-white module to store and recall a look at power-on, and if so, what mode and channel sequence does it need? Specifically, how do we store a power-on look on a tunable-white Calumma module using RDM, and which manufacturer setting controls it?"
-    </div>
   </div>
 
-  <!-- g2. Live DMX floats -->
   <div class="card">
-    <span class="kicker small">Some floats are different</span>
-    <h2>Live DMX floats</h2>
-    <p>A float set to <strong>On live DMX input</strong> (Patch &gt; Float details) does not run stand-alone. It takes live DMX from show control during the parade. Its last tab is called <strong>Parade</strong>.</p>
-    <ol class="plain">
-      <li>Every Calumma needs its own address.</li>
-      <li>Pick the mode the show-control programmer wants (Mode 11 = 3 channels per tunable white fixture).</li>
-      <li>Scan, then check each light with Identify.</li>
-      <li>Press <strong>Auto-address</strong>, then <strong>Send addresses to fixtures</strong> at the bottom of the Fixtures list.</li>
-      <li>Check the result with Flash or the Address finder.</li>
-      <li>Print the patch sheet for the programmer.</li>
-      <li>On the box: leave <strong>Output Data</strong> Enabled. Set <strong>DMX Input</strong> to Wired DMX if show control arrives on a DMX cable, or keep it on Ethernet and match Net / Sub-Net / Universe if it arrives over the network.</li>
-      <li>Power cycle the box.</li>
-      <li>Press <strong>Release</strong>.</li>
-    </ol>
-    <div class="note">Any float can be switched between "On its own" and "On live DMX input" in <strong>Patch &gt; Float details</strong>.</div>
+    <span class="kicker small">⚙</span>
+    <h2>Setup</h2>
+<table class="bt"><tr><th>Button</th><th>What it does</th></tr>
+<tr><td>Export</td><td>Save all floats, looks and colours to a file. Send this file to share the show.</td></tr>
+<tr><td>Import</td><td>Load a file from someone else. Nothing on this iPad is deleted; you choose what to take.</td></tr>
+<tr><td>+ Float</td><td>Add a float.</td></tr>
+<tr><td>Field guide</td><td>This page.</td></tr>
+<tr><td>White test / Tunable white test</td><td>Compare white settings on the real lights.</td></tr>
+<tr><td>Backup copy folder</td><td>A second place to keep the show (computer app only).</td></tr>
+</table>
   </div>
 
-  <!-- h. Troubleshooting -->
   <div class="card">
     <span class="kicker small">If something isn't working</span>
     <h2>Troubleshooting</h2>
-    <table class="tt-table">
-      <tr><th>Problem</th><th>Check</th></tr>
-      <tr><td>Nothing found</td><td>The cable is seated in the box's network port; the computer and box are on the same network (Setup shows the computer's address); the box's DMX Input is set to Ethernet and it's been power-cycled since; the box's IP shown in its Info menu.</td></tr>
-      <tr><td>More than one network is active (Wi-Fi and Ethernet, or two adapters)</td><td>Setup &gt; Network adapter: pick the one connected to the box instead of Automatic.</td></tr>
-      <tr><td>Found the box but lights don't respond</td><td>Net / Sub-Net / Universe mismatch between the box and the app; the box wasn't power-cycled after a settings change; the float isn't live; the Release button was pressed.</td></tr>
-      <tr><td>"Port busy" shown in the status pill</td><td>Another lighting app is open. Quit it, then restart DMX Scene Builder.</td></tr>
-      <tr><td>iPad can't load the page</td><td>Is it on the same Wi-Fi as the Mac? Is client isolation off on the router? Use the exact address shown in the DMX Scene Builder window. If nothing works, fall back to Sidecar.</td></tr>
-      <tr><td>Scan says no RDM reply</td><td>Use REAP or Robe Toolkit to set addresses directly, then confirm with the Address finder.</td></tr>
-      <tr><td>Two fixtures do the same thing</td><td>They share a DMX address. Use Auto-address then Send patch addresses to fixtures, or fix it directly in REAP.</td></tr>
-      <tr><td>Colour temperature slider does nothing on an RGB fixture</td><td>Modes 1, 2, and 5 have no colour temperature channel. Switch that fixture to Mode 3, 4, 6, or 7.</td></tr>
-      <tr><td>Status says "Address finder running" and the float is dark</td><td>Stop it on the Patch tab.</td></tr>
-      <tr><td>"This float was changed on another device"</td><td>The app reloads it. This happens if the Mac and iPad both edit the same float.</td></tr>
-    </table>
+<table class="bt"><tr><th>Problem</th><th>Try</th></tr>
+<tr><td>Box not answering</td><td>Box power on? Network cable in? iPad on the right network?</td></tr>
+<tr><td>Live but lights don't change</td><td>Net · Sub · Uni match the box? Box on Play saved look? Press Back to app control.</td></tr>
+<tr><td>Go live says the box is playing its saved look</td><td>Save tab &gt; Back to app control.</td></tr>
+<tr><td>Find shows nothing</td><td>Same network? Box finished starting up? Try again after 30 s.</td></tr>
+<tr><td>Two lights do the same thing</td><td>They share an address. Patch &gt; Auto-address &gt; Send addresses to fixtures.</td></tr>
+<tr><td>A look does nothing</td><td>The look was saved for lights no longer in the patch. Set it again and Save look.</td></tr>
+<tr><td>Float changed on another device</td><td>Someone else edited it. The app reloads it.</td></tr>
+</table>
   </div>
 
-  <!-- i. Where things are saved -->
   <div class="card">
-    <span class="kicker small">Data</span>
-    <h2>Where things are saved</h2>
-    <p>Everything lives on the Mac at:</p>
-    <p class="mono">~/Library/Application Support/DMXSceneBuilder/project.json</p>
-    <p>with a backup made every minute in the backups folder next to it.</p>
-    <p>Use <strong>Setup &gt; Export project</strong> to copy a fresh backup to Dropbox.</p>
-    <p class="muted">A new install starts with made-up demo floats. Load your own show with <strong>Setup &gt; Import project</strong>. Show data stays on the Mac and is never part of the app's code.</p>
+    <span class="kicker small">Only for a replacement box</span>
+    <h2>E-Box settings</h2>
+    <ul>
+      <li>Personality &gt; DMX Input = <strong>Ethernet</strong></li>
+      <li>Personality &gt; Ethernet mode = <strong>Artnet</strong></li>
+      <li>E-box mode = <strong>Pass-Thr</strong></li>
+      <li>Power cycle the box after any change.</li>
+    </ul>
   </div>
 </div>
 </body>

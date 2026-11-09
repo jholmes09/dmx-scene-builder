@@ -39,6 +39,7 @@ class App:
         self.personalities: dict = {}
         self._identify_timers: dict = {}
         self.reap_devices: dict = {}  # box ip -> {uid_str: device dict from the box's web page}
+        self.box_playing: dict = {}  # box ip -> True while it plays its saved look (last seen or set)
 
     # ---------------------------------------------------------- simulator
     def sim_on(self):
@@ -482,6 +483,9 @@ class Handler(BaseHTTPRequestHandler):
                 if job and job.get("state") == "running" and job.get("float") != b.get("float_id"):
                     raise RuntimeError("A save is running on another float. Wait for it to finish.")
                 if not (job and job.get("state") == "running" and eng.active_float == b.get("float_id")):
+                    fl = store.get_float(b.get("float_id"))
+                    if fl:
+                        self.refuse_if_playing(fl)
                     eng.set_active(b.get("float_id"), output=True)
             elif action == "release":
                 eng.release()
@@ -925,6 +929,21 @@ class Handler(BaseHTTPRequestHandler):
                 "mirror_dir": st.settings.get("mirror_dir"), "mirror_file": str(mp) if mp else None,
                 "last_mirrored": st.last_mirrored, "mirror_error": st.mirror_error}
 
+    def refuse_if_playing(self, fl):
+        """A box on "Play saved look" ignores the app. Going live would claim control it doesn't have."""
+        for box in fl["boxes"]:
+            if not box.get("ip"):
+                continue
+            try:
+                od = Reap(box["ip"], timeout=2.0).other_settings().get("ic_od")
+                self.app.box_playing[box["ip"]] = od == "disabled"
+            except Exception:
+                # No answer: restarting, other gear, or the simulator. Go by what the app last set.
+                od = "disabled" if self.app.box_playing.get(box["ip"]) else None
+            if od == "disabled":
+                raise RuntimeError("%s is playing its saved look, so the app can't control it. "
+                                   "On the Save tab, press 'Back to app control' first." % box["name"])
+
     def _box_action(self, fl, b):
         """Box-wide settings through its web page: read them, or switch Output data."""
         ip, _, _ = self.app.box_target(fl, b["box_id"])
@@ -932,9 +951,11 @@ class Handler(BaseHTTPRequestHandler):
         if b.get("action") == "output_data":
             self.app.engine.release()
             reap.set_other(output_data=bool(b["enabled"]))
+            self.app.box_playing[ip] = not bool(b["enabled"])
             reap.restart()
-            return self._json({"ok": True, "restarting": True})
+            return self._json({"ok": True, "restarting": True, "engine": self.app.engine.status()})
         s = reap.other_settings()
+        self.app.box_playing[ip] = s.get("ic_od") == "disabled"
         return self._json({"ok": True, "output_data": s.get("ic_od"), "mode": s.get("ebm"), "dmx_hold": s.get("dmxh")})
 
     def _rdm_action(self, fl, b):

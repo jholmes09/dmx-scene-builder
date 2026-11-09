@@ -508,12 +508,21 @@ class BoxOfflineTests(StressBase):
         r = self.call("POST", "/api/floats/%s/box" % self.fid, {"box_id": self.bid, "action": "output_data", "enabled": False})
         self.assertEqual(r.code, 200, r)
         self.assertFalse(self.status()["output"])
+        self.assertFalse(r.body["engine"]["output"])   # the screen is told straight away
         r = self.call("POST", "/api/floats/%s/box" % self.fid, {"box_id": self.bid})   # box mid-restart
         self.assertEqual(r.code, 400, r)
+        go = lambda: self.call("POST", "/api/output", {"action": "activate", "float_id": self.fid})
+        r = go()   # mid-restart the box can't answer: the app goes by what it set
+        self.assertEqual(r.code, 400, r)
+        self.assertIn("playing its saved look", r.error)
+        self.assertFalse(self.status()["output"])
         time.sleep(self.box.restart_s + 0.3)
         self.assertEqual(self.call("POST", "/api/floats/%s/box" % self.fid, {"box_id": self.bid}).body["output_data"], "disabled")
+        r = go()   # box back up and playing on its own
+        self.assertEqual(r.code, 400, r)
+        self.assertIn("Back to app control", r.error)
+        self.assertFalse(self.status()["output"])
         self.assertTrue(self.apply().body["ok"])
-        self.go_live()
         self.assertIn("Play saved look", self.save().error)
         r = self.call("POST", "/api/floats/%s/box" % self.fid, {"box_id": self.bid, "action": "output_data", "enabled": True})
         self.assertEqual(r.code, 200, r)
