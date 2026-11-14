@@ -995,7 +995,9 @@ function foundExtras(fl) {
     if (res.error) { wrap.append(h("div", { class: "note bad", style: { marginTop: "10px" } }, name + res.error)); continue; }
     const extra = res.devices.filter(d => d.ok && !linkedUids.has(d.uid));
     if (!extra.length) continue;
-    const freeFx = fl.fixtures.filter(f => f.box_id === b.id && !f.uid);
+    // A replaced light: its fixture still points at the old light, which the scan didn't find.
+    const seen = new Set(res.devices.filter(d => d.ok).map(d => d.uid));
+    const freeFx = fl.fixtures.filter(f => f.box_id === b.id && (!f.uid || !seen.has(f.uid)));
     wrap.append(h("div", { class: "note warn", style: { marginTop: "10px" } },
       h("strong", null, `${name}${extra.length} light(s) not matched yet. Identify it, then say which fixture it is.`),
       extra.map(d => {
@@ -1005,7 +1007,7 @@ function foundExtras(fl) {
           applyScan(fl, b, { devices: [d] });
         } },
           h("option", { value: "" }, "This is…"),
-          freeFx.map(f => h("option", { value: f.id }, f.label)),
+          freeFx.map(f => h("option", { value: f.id }, f.uid ? `${f.label} (replaced)` : f.label)),
           h("option", { value: "__new" }, "A new fixture"));
         return h("div", { class: "btn-row", style: { marginTop: "8px" } },
           h("span", { style: { flex: 1 } }, `${d.label || d.uid} · ch ${d.address} · Mode ${d.mode}`),
