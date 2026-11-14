@@ -768,6 +768,17 @@ class BoxCheckTests(StressBase):
         self.assertEqual((self.box.dmxi, self.box.ethm, self.box.ebm), ("ethernet", "Art-NET", "pass-through"))
         self.assertEqual(self.scan().code, 200)
 
+    def test_live_dmx_float_keeps_its_wired_input(self):
+        fl = self.float()
+        fl["run_mode"] = "live_dmx"
+        self.call("PUT", "/api/floats/" + self.fid, fl)
+        self.box.dmxi = "wired DMX"
+        c = self.check()
+        x = [i for i in c["issues"] if i["key"] == "dmx_input"][0]
+        self.assertEqual((x["level"], x["fix"]), ("info", None))
+        self.call("POST", "/api/floats/%s/fix_box" % self.fid, {"box_id": self.bid})
+        self.assertEqual(self.box.dmxi, "wired DMX")   # Fix never touches a show-control float's input
+
     def test_universe_mismatch_is_fixed_in_the_app(self):
         fl = self.float()
         fl["boxes"][0]["universe"] = 3

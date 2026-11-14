@@ -568,7 +568,11 @@ final class API {
             let reap = Reap(ip, timeout: 3.0)
             if let d = try? reap.dmxSettings() {
                 if let i = Reap.optionIndex(d["dmxi"], Reap.dmxInputs), i != 3 {
-                    add("dmx_input", "error", "DMX input is set to \(Reap.dmxInputs[i]). It must be Ethernet, or the lights ignore the app.", fix: "box")
+                    if fl["run_mode"].string == "live_dmx" {  // show control may arrive on a DMX cable: never "fix" that
+                        add("dmx_input", "info", "DMX input is \(Reap.dmxInputs[i]). The app only controls this box when it's Ethernet; leave it as show control needs it.")
+                    } else {
+                        add("dmx_input", "error", "DMX input is set to \(Reap.dmxInputs[i]). It must be Ethernet, or the lights ignore the app.", fix: "box")
+                    }
                 }
             } else {
                 add("unread_dmx", "info", "Couldn't read the box's DMX input setting.")

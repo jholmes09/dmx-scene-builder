@@ -153,8 +153,12 @@ class App:
             try:
                 i = Reap.option_index(reap.dmx_settings().get("dmxi"), Reap.DMX_INPUTS)
                 if i is not None and i != 3:
-                    add("dmx_input", "error", "DMX input is set to %s. It must be Ethernet, or the lights ignore the app."
-                        % Reap.DMX_INPUTS[i], fix="box")
+                    if fl.get("run_mode") == "live_dmx":  # show control may arrive on a DMX cable: never "fix" that
+                        add("dmx_input", "info", "DMX input is %s. The app only controls this box when it's Ethernet; "
+                            "leave it as show control needs it." % Reap.DMX_INPUTS[i])
+                    else:
+                        add("dmx_input", "error", "DMX input is set to %s. It must be Ethernet, or the lights ignore the app."
+                            % Reap.DMX_INPUTS[i], fix="box")
             except ReapError:
                 add("unread_dmx", "info", "Couldn't read the box's DMX input setting.")
             try:
