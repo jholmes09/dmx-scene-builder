@@ -14,6 +14,7 @@ from scenebuilder import fixtures
 ap = argparse.ArgumentParser()
 ap.add_argument("show"); ap.add_argument("--rows", type=int, default=0); ap.add_argument("--first", type=int, default=0)
 ap.add_argument("--all-looks", action="store_true", help="list every saved look instead of only what the app last sent")
+ap.add_argument("--whole", action="append", default=[], help="float code to keep on one page of its own (never split)")
 ap.add_argument("--note", action="append", default=[], help='"CODE=text": a note printed under that float\'s heading')
 args = ap.parse_args()
 d = json.load(open(args.show))
@@ -75,24 +76,39 @@ for fl in d["floats"]:
     elif args.all_looks and not looks:
         notes.append("No saved look in the app yet.")
     boxes = []
-    for b in fl["boxes"]:
-        fxs = [x for x in fl["fixtures"] if x.get("box_id") == b["id"]]
-        if not fxs: continue
-        line = "**%s:** IP %s, Art-Net %d:%d:%d" % (b.get("name") or "E-Box", b.get("ip") or "not set", b.get("net", 0), b.get("subnet", 0), b.get("universe", 0))
-        groups = []
-        for x in sorted(fxs, key=lambda x: (x.get("address") is None, x.get("address") or 0)):
-            addr = str(x["address"]) if x.get("address") else "Not set"
-            pres = [(n,) + value(x, st[x["id"]]) for n, st in looks if x["id"] in st] or [("None", "", "")]
-            groups.append([("| %s | %s | %s | %s | %s | %s |" % (((clean(x["label"]), TYPE.get(x["variant"], x["variant"]), addr) if i == 0 else ("", "", "")) + p),
-                            1 + 0.6 * (len(p[0]) > 13) + 0.6 * (i == 0 and len(clean(x["label"])) > 22) + 0.6 * (len(p[2]) > 22))
-                           for i, p in enumerate(pres)])
-        boxes.append((line, groups))
+    used_boxes = [b for b in fl["boxes"] if any(x.get("box_id") == b["id"] for x in fl["fixtures"])]
+    multi = len(used_boxes) > 1
+    def box_line(b):
+        return "**%s:** IP %s, Art-Net %d:%d:%d" % (b.get("name") or "E-Box", b.get("ip") or "not set", b.get("net", 0), b.get("subnet", 0), b.get("universe", 0))
+    def box_tag(b):
+        n = (b.get("name") or "").strip()
+        return n.split()[-1] if n else "?"
+    def group(x, tag=None):
+        addr = str(x["address"]) if x.get("address") else "Not set"
+        pres = [(n,) + value(x, st[x["id"]]) for n, st in looks if x["id"] in st] or [("None", "", "")]
+        rows = []
+        for i, p in enumerate(pres):
+            lead = (clean(x["label"]), TYPE.get(x["variant"], x["variant"])) + ((tag,) if tag else ()) + (addr,)
+            cells = (lead if i == 0 else ("",) * len(lead)) + p
+            w = 1 + 0.6 * (len(p[0]) > 13) + 0.6 * (i == 0 and len(clean(x["label"])) > 22) + 0.6 * (len(p[2]) > 22)
+            rows.append(("| " + " | ".join(cells) + " |", w))
+        return rows
+    if multi:
+        fxs = [x for x in fl["fixtures"] if any(x.get("box_id") == b["id"] for b in used_boxes)]
+        tags = {b["id"]: box_tag(b) for b in used_boxes}
+        boxes.append(("<br>".join(box_line(b) for b in used_boxes),
+                      [group(x, tags[x["box_id"]]) for x in sorted(fxs, key=lambda x: (x.get("address") is None, x.get("address") or 0))], True))
+    else:
+        for b in used_boxes:
+            fxs = [x for x in fl["fixtures"] if x.get("box_id") == b["id"]]
+            boxes.append((box_line(b), [group(x) for x in sorted(fxs, key=lambda x: (x.get("address") is None, x.get("address") or 0))], False))
     if not fl["fixtures"]:
         notes.append("No Calumma lights in the app for this float.")
     floats.append((title, notes, boxes))
 
 # ---- lay out
 TH = "| Fixture | Type | Address | Preset | Dimmer | Color |\n|---|---|---|---|---|---|"
+TH_BOX = "| Fixture | Type | Box | Address | Preset | Dimmer | Color |\n|---|---|---|---|---|---|---|"
 out, used = [], 0
 cap = args.first or args.rows
 
@@ -102,21 +118,23 @@ def new_page():
     used, cap = 0, args.rows
 
 for title, notes, boxes in floats:
-    need = HEAD_ROWS + NOTE_ROWS * len(notes) + sum(BOX_ROWS + sum(w for g in gs for _, w in g) for _, gs in boxes)
-    if args.rows and used and used + need > cap:
+    whole = any(title.startswith(c + " ") for c in args.whole)
+    need = HEAD_ROWS + NOTE_ROWS * len(notes) + sum(BOX_ROWS + (1 if m else 0) + sum(w for g in gs for _, w in g) for _, gs, m in boxes)
+    if args.rows and used and (used + need > cap or whole):
         new_page()
     out.append("### %s\n" % title); used += HEAD_ROWS
     for n in notes:
         out.append(n + "\n"); used += NOTE_ROWS
-    for line, groups in boxes:
-        if args.rows and used + BOX_ROWS + sum(w for _, w in groups[0]) > cap:
+    for line, groups, m in boxes:
+        th = TH_BOX if m else TH
+        if args.rows and not whole and used + BOX_ROWS + sum(w for _, w in groups[0]) > cap:
             new_page(); out.append("### %s, continued\n" % title); used += HEAD_ROWS
-        out.append(line + "\n"); out.append(TH); used += BOX_ROWS
+        out.append(line + "\n"); out.append(th); used += BOX_ROWS + (1 if m else 0)
         for g in groups:
-            if args.rows and used + sum(w for _, w in g) > cap:
+            if args.rows and not whole and used + sum(w for _, w in g) > cap:
                 out.append("")
                 new_page(); out.append("### %s, continued\n" % title); used += HEAD_ROWS
-                out.append(line + "\n"); out.append(TH); used += BOX_ROWS
+                out.append(line + "\n"); out.append(th); used += BOX_ROWS + (1 if m else 0)
             out.extend(r for r, _ in g); used += sum(w for _, w in g)
         out.append("")
 print("\n".join(out))
